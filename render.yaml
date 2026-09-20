@@ -1,0 +1,16 @@
+services:
+  - type: web
+    name: loride-backend
+    runtime: docker
+    dockerContext: backend
+    dockerfilePath: backend/Dockerfile
+    plan: free
+    envVars:
+      - key: ENVIRONMENT
+        value: production
+      - key: JWT_SECRET
+        generateValue: true
+      - key: TWOFACTOR_API_KEY
+        value: c1cf5835-6543-11f1-8f15-0200cd936042
+      - key: DATABASE_URL
+        sync: false

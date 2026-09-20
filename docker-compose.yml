@@ -1,0 +1,40 @@
+version: '3.8'
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    container_name: loride-db
+    environment:
+      POSTGRES_USER: loride
+      POSTGRES_PASSWORD: loride
+      POSTGRES_DB: loride
+    ports:
+      - "5432:5432"
+    volumes:
+      - loride_pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U loride"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  api:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    container_name: loride-api
+    ports:
+      - "8080:8080"
+    environment:
+      DATABASE_URL: postgres://loride:loride@postgres:5432/loride?sslmode=disable
+      JWT_SECRET: lo-ride-dev-secret-change-in-production
+      PORT: "8080"
+      ENVIRONMENT: development
+      GOOGLE_MAPS_API_KEY: ${GOOGLE_MAPS_API_KEY:-}
+      EXPO_PUSH_ACCESS_TOKEN: ${EXPO_PUSH_ACCESS_TOKEN:-}
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+volumes:
+  loride_pgdata:
