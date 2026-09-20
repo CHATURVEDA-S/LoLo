@@ -10,12 +10,22 @@
     },
     "preview": {
       "distribution": "internal",
+      "env": {
+        "EXPO_PUBLIC_API_URL": "https://lolo-ff1e.onrender.com/api",
+        "EXPO_PUBLIC_SUPABASE_URL": "https://ttybzghytqyyopbvtcbi.supabase.co",
+        "EXPO_PUBLIC_SUPABASE_ANON_KEY": "sb_publishable_v48GVM3DnMe9vbzq_rZBJA_DZSWuHSC"
+      },
       "android": {
         "buildType": "apk"
       }
     },
     "production": {
       "autoIncrement": true,
+      "env": {
+        "EXPO_PUBLIC_API_URL": "https://lolo-ff1e.onrender.com/api",
+        "EXPO_PUBLIC_SUPABASE_URL": "https://ttybzghytqyyopbvtcbi.supabase.co",
+        "EXPO_PUBLIC_SUPABASE_ANON_KEY": "sb_publishable_v48GVM3DnMe9vbzq_rZBJA_DZSWuHSC"
+      },
       "android": {
         "buildType": "app-bundle"
       }
