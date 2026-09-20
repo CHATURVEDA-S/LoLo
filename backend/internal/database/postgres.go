@@ -16,6 +16,7 @@ import (
 var DB *sql.DB
 
 func Connect(databaseURL string) error {
+	databaseURL = strings.TrimSpace(databaseURL)
 	var err error
 	DB, err = sql.Open("postgres", databaseURL)
 	if err == nil {
