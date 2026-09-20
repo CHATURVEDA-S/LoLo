@@ -246,7 +246,7 @@ const privacyPolicyHTML = `<!DOCTYPE html>
         We implement robust administrative, technical, and physical safeguards to protect your personal data. All network communication between the app and our servers is encrypted using industry-standard Transport Layer Security (TLS/HTTPS). Driver verification records are stored in secure, encrypted cloud databases.
       </p>
 
-      <h2>6. Account Deletion & User Rights (Google Play Policy Compliance)</h2>
+      <h2 id="delete-account">6. Account Deletion & User Rights (Google Play Policy Compliance)</h2>
       <p>
         Under Google Play's User Data policy, you have full control over your personal information:
       </p>

@@ -65,9 +65,10 @@ func main() {
 		})
 	}).Methods("GET")
 
-	// Privacy Policy (Google Play Store requirement)
+	// Privacy Policy & Account Deletion (Google Play Store requirements)
 	r.HandleFunc("/privacy", handlers.PrivacyPolicyHandler).Methods("GET", "HEAD")
 	r.HandleFunc("/privacy-policy", handlers.PrivacyPolicyHandler).Methods("GET", "HEAD")
+	r.HandleFunc("/delete-account", handlers.PrivacyPolicyHandler).Methods("GET", "HEAD")
 	r.HandleFunc("/api/privacy-policy", handlers.PrivacyPolicyHandler).Methods("GET", "HEAD")
 
 	// Public routes
