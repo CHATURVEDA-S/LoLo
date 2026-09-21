@@ -24,7 +24,6 @@ import {
   CheckCircle2,
   XCircle,
   Phone,
-  Sparkles,
 } from 'lucide-react-native';
 import { api } from '@/lib/api';
 import { useAuth } from '@/lib/auth-context';

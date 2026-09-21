@@ -28,7 +28,7 @@ import {
   Zap,
   Navigation,
   Users,
-  Sparkles,
+  Plus,
 } from 'lucide-react-native';
 import { useAuth } from '@/lib/auth-context';
 import { api } from '@/lib/api';
@@ -606,7 +606,7 @@ export default function HomeScreen() {
                   onPress={() => router.push('/passenger-post/create')}
                   activeOpacity={0.85}
                 >
-                  <Sparkles size={15} color="#ffffff" strokeWidth={2.2} />
+                  <Plus size={15} color="#ffffff" strokeWidth={2.4} />
                   <Text style={styles.emptyBtnText}>Post a Drop Request</Text>
                 </TouchableOpacity>
               </View>

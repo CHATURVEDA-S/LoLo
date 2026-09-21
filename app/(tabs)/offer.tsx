@@ -1,8 +1,9 @@
-import { useState, useEffect, useCallback } from 'react';
+import { useState, useEffect, useCallback, useRef } from 'react';
 import {
   StyleSheet,
   View,
   Text,
+  TextInput,
   TouchableOpacity,
   ScrollView,
   Alert,
@@ -10,8 +11,12 @@ import {
   Platform,
   Switch,
   Modal,
+  Dimensions,
+  LayoutAnimation,
+  UIManager,
 } from 'react-native';
 import { router, useFocusEffect } from 'expo-router';
+import * as Location from 'expo-location';
 import {
   Calendar,
   Clock,
@@ -23,26 +28,25 @@ import {
   ShieldAlert,
   MapPin,
   RefreshCw,
-  ArrowRight,
   Navigation,
-  Sparkles,
   Users,
   Info,
+  X,
+  ChevronRight,
+  Crosshair,
 } from 'lucide-react-native';
 import DateTimePicker, { DateTimePickerAndroid } from '@react-native-community/datetimepicker';
 import { api } from '@/lib/api';
 import { useAuth } from '@/lib/auth-context';
 import { Colors, Spacing, Radius, FontSizes, Shadow } from '@/lib/theme';
 import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context';
-import LocationPicker from '@/components/LocationPicker';
+import RoutePreviewMap from '@/components/RoutePreviewMap';
+import { METRO_PLACES } from '@/components/LocationPicker';
 import type { SupportedCity, VehicleType, DriverVerification } from '@/lib/types';
 import { calculateFare, type FareCalculationResult } from '@/lib/fare-calculator';
 
-interface LocationResult {
-  name: string;
-  lat: number;
-  lng: number;
-  placeId?: string;
+if (Platform.OS === 'android' && UIManager.setLayoutAnimationEnabledExperimental) {
+  UIManager.setLayoutAnimationEnabledExperimental(true);
 }
 
 const ALL_WEEK_DAYS = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'];
@@ -50,6 +54,7 @@ const ALL_WEEK_DAYS = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'];
 export default function OfferRideScreen() {
   const { user } = useAuth();
   const insets = useSafeAreaInsets();
+  const { height: windowHeight } = Dimensions.get('window');
 
   // Vehicle Type & Safety
   const [vehicleType, setVehicleType] = useState<VehicleType>('car');
@@ -59,12 +64,29 @@ export default function OfferRideScreen() {
   const [verification, setVerification] = useState<DriverVerification | null>(null);
   const [loadingVerification, setLoadingVerification] = useState(true);
 
-  // Location
-  const [origin, setOrigin] = useState<LocationResult | null>(null);
-  const [destination, setDestination] = useState<LocationResult | null>(null);
+  // Search & Route State
+  const [origin, setOrigin] = useState('');
+  const [originCoords, setOriginCoords] = useState<{ lat: number; lng: number } | null>(null);
+  const [destination, setDestination] = useState('');
+  const [destCoords, setDestCoords] = useState<{ lat: number; lng: number } | null>(null);
+  const [detectingGps, setDetectingGps] = useState(false);
+
+  // Autocomplete suggestions
+  const [activeInput, setActiveInput] = useState<'origin' | 'dest' | null>(null);
+  const [suggestions, setSuggestions] = useState<
+    Array<{ name: string; address: string; lat: number; lng: number }>
+  >([]);
+  const [searchingAddress, setSearchingAddress] = useState(false);
+  const searchTimerRef = useRef<any>(null);
+  const searchAbortRef = useRef<AbortController | null>(null);
+  const scrollViewRef = useRef<ScrollView>(null);
 
   // Date & Time
-  const [departureDate, setDepartureDate] = useState(new Date());
+  const [departureDate, setDepartureDate] = useState<Date>(() => {
+    const d = new Date();
+    d.setMinutes(d.getMinutes() + 30);
+    return d;
+  });
   const [showDatePicker, setShowDatePicker] = useState(false);
   const [showTimePicker, setShowTimePicker] = useState(false);
 
@@ -80,6 +102,12 @@ export default function OfferRideScreen() {
   const [cityData, setCityData] = useState<SupportedCity | null>(null);
 
   const isVerified = Boolean(user?.is_verified_driver);
+  const hasRoute = Boolean(originCoords && destCoords && destination.trim());
+
+  // Auto-adjust layout on route selection
+  useEffect(() => {
+    LayoutAnimation.configureNext(LayoutAnimation.Presets.easeInEaseOut);
+  }, [hasRoute]);
 
   // Load verification and vehicle details from profile
   const loadDriverData = useCallback(async () => {
@@ -118,6 +146,207 @@ export default function OfferRideScreen() {
     }, [loadDriverData])
   );
 
+  // Auto-detect GPS location on mount for origin
+  useEffect(() => {
+    useCurrentLocationForOrigin(false);
+  }, []);
+
+  async function useCurrentLocationForOrigin(forceAlert = true) {
+    setDetectingGps(true);
+    try {
+      let { status } = await Location.getForegroundPermissionsAsync();
+      if (status !== 'granted') {
+        const req = await Location.requestForegroundPermissionsAsync();
+        status = req.status;
+      }
+      if (status !== 'granted') {
+        if (forceAlert) {
+          Alert.alert('Permission Denied', 'Please enable location permissions to auto-detect your pickup point.');
+        }
+        setDetectingGps(false);
+        return;
+      }
+      const pos = await Location.getCurrentPositionAsync({ accuracy: Location.Accuracy.Balanced });
+      setOriginCoords({ lat: pos.coords.latitude, lng: pos.coords.longitude });
+      const [geo] = await Location.reverseGeocodeAsync({
+        latitude: pos.coords.latitude,
+        longitude: pos.coords.longitude,
+      });
+      if (geo) {
+        const parts = [geo.name, geo.street, geo.subregion || geo.district, geo.city].filter(Boolean);
+        setOrigin(parts.length > 0 ? parts.join(', ') : `${pos.coords.latitude.toFixed(4)}, ${pos.coords.longitude.toFixed(4)}`);
+      }
+    } catch (e) {
+      console.log('GPS error:', e);
+    } finally {
+      setDetectingGps(false);
+    }
+  }
+
+  // Fast address search with instant local metro places + debounced Nominatim
+  function handleSearchAddress(query: string, target: 'origin' | 'dest') {
+    const trimmed = query.trim();
+    if (!trimmed || trimmed.length < 2) {
+      setSuggestions([]);
+      setSearchingAddress(false);
+      return;
+    }
+
+    setActiveInput(target);
+    const activeCity = user?.city || 'Hyderabad';
+    const cityPlaces = (METRO_PLACES as any)[activeCity] || (METRO_PLACES as any)['Hyderabad'] || [];
+
+    // 1. Instant local matching
+    const localMatches = cityPlaces
+      .filter((p: any) => {
+        const q = trimmed.toLowerCase();
+        return p.name.toLowerCase().includes(q) || p.address.toLowerCase().includes(q);
+      })
+      .map((p: any) => ({
+        name: p.name,
+        address: p.address,
+        lat: p.lat,
+        lng: p.lng,
+      }));
+
+    setSuggestions(localMatches);
+
+    // 2. Debounced online Nominatim & geocoding (200ms)
+    if (searchTimerRef.current) clearTimeout(searchTimerRef.current);
+    if (searchAbortRef.current) searchAbortRef.current.abort();
+
+    const controller = new AbortController();
+    searchAbortRef.current = controller;
+
+    searchTimerRef.current = setTimeout(async () => {
+      setSearchingAddress(true);
+      try {
+        const nomQuery = trimmed.toLowerCase().includes(activeCity.toLowerCase())
+          ? trimmed
+          : `${trimmed}, ${activeCity}`;
+        const res = await fetch(
+          `https://nominatim.openstreetmap.org/search?q=${encodeURIComponent(nomQuery)}&format=json&addressdetails=1&limit=8&countrycodes=in`,
+          {
+            signal: controller.signal,
+            headers: { 'User-Agent': 'LoRideApp/1.0' },
+          }
+        );
+        if (res.ok) {
+          const data = await res.json();
+          if (Array.isArray(data) && data.length > 0) {
+            const onlineList: Array<{ name: string; address: string; lat: number; lng: number }> = [];
+            data.forEach((item: any) => {
+              const lat = parseFloat(item.lat);
+              const lng = parseFloat(item.lon);
+              if (isNaN(lat) || isNaN(lng)) return;
+              const rawName = item.name || item.display_name?.split(',')[0] || trimmed;
+              const addr = item.address || {};
+              const locality = addr.suburb || addr.neighbourhood || addr.city_district;
+              const displayName = locality && !rawName.toLowerCase().includes(locality.toLowerCase())
+                ? `${rawName}, ${locality}`
+                : rawName;
+
+              onlineList.push({
+                name: displayName,
+                address: item.display_name || `${activeCity}, India`,
+                lat,
+                lng,
+              });
+            });
+
+            // Combine without duplicates
+            const combined = [...localMatches];
+            onlineList.forEach((item) => {
+              const exists = combined.some(
+                (c) => Math.abs(c.lat - item.lat) < 0.002 && Math.abs(c.lng - item.lng) < 0.002
+              );
+              if (!exists) combined.push(item);
+            });
+            setSuggestions(combined);
+          }
+        }
+      } catch (err: any) {
+        if (err.name === 'AbortError') return;
+      } finally {
+        setSearchingAddress(false);
+      }
+    }, 200);
+  }
+
+  function handleSelectSuggestion(item: { name: string; address: string; lat: number; lng: number }) {
+    if (activeInput === 'origin') {
+      setOrigin(item.name);
+      setOriginCoords({ lat: item.lat, lng: item.lng });
+    } else {
+      setDestination(item.name);
+      setDestCoords({ lat: item.lat, lng: item.lng });
+    }
+    setSuggestions([]);
+    setActiveInput(null);
+  }
+
+  function handleClearOrigin() {
+    setOrigin('');
+    setOriginCoords(null);
+    setSuggestions([]);
+    if (activeInput === 'origin') setActiveInput(null);
+  }
+
+  function handleClearDest() {
+    setDestination('');
+    setDestCoords(null);
+    setSuggestions([]);
+    if (activeInput === 'dest') setActiveInput(null);
+  }
+
+  async function resolveDestinationCoords(text: string) {
+    if (!text.trim()) {
+      setDestCoords(null);
+      return;
+    }
+    try {
+      const results = await Location.geocodeAsync(text.trim());
+      if (results && results.length > 0) {
+        setDestCoords({ lat: results[0].latitude, lng: results[0].longitude });
+      }
+    } catch {}
+  }
+
+  // Handle selecting location directly by tapping anywhere on map
+  async function handleMapLocationSelect(coords: { lat: number; lng: number }) {
+    const isOrigin = activeInput === 'origin';
+    const cleanLat = Math.round(coords.lat * 100000) / 100000;
+    const cleanLng = Math.round(coords.lng * 100000) / 100000;
+
+    if (isOrigin) {
+      setOriginCoords({ lat: cleanLat, lng: cleanLng });
+      setOrigin(`${cleanLat}, ${cleanLng}`);
+      try {
+        const [geo] = await Location.reverseGeocodeAsync({
+          latitude: cleanLat,
+          longitude: cleanLng,
+        });
+        if (geo) {
+          const parts = [geo.name, geo.street, geo.subregion || geo.district || geo.city].filter(Boolean);
+          if (parts.length > 0) setOrigin(parts.join(', '));
+        }
+      } catch {}
+    } else {
+      setDestCoords({ lat: cleanLat, lng: cleanLng });
+      setDestination(`${cleanLat}, ${cleanLng}`);
+      try {
+        const [geo] = await Location.reverseGeocodeAsync({
+          latitude: cleanLat,
+          longitude: cleanLng,
+        });
+        if (geo) {
+          const parts = [geo.name, geo.street, geo.subregion || geo.district || geo.city].filter(Boolean);
+          if (parts.length > 0) setDestination(parts.join(', '));
+        }
+      } catch {}
+    }
+  }
+
   useEffect(() => {
     async function loadCityData() {
       const { data } = await api.getCities();
@@ -130,14 +359,14 @@ export default function OfferRideScreen() {
     loadCityData();
   }, [user?.city]);
 
-  // Automatically recalculate fare when route coordinates, vehicle, or time changes
+  // Recalculate fare when coordinates, vehicle, or time changes
   useEffect(() => {
-    if (origin?.lat && origin?.lng && destination?.lat && destination?.lng) {
+    if (originCoords?.lat && originCoords?.lng && destCoords?.lat && destCoords?.lng) {
       const calc = calculateFare({
-        originLat: origin.lat,
-        originLng: origin.lng,
-        destLat: destination.lat,
-        destLng: destination.lng,
+        originLat: originCoords.lat,
+        originLng: originCoords.lng,
+        destLat: destCoords.lat,
+        destLng: destCoords.lng,
         vehicleType,
         departureTime: departureDate,
         city: user?.city,
@@ -146,7 +375,7 @@ export default function OfferRideScreen() {
     } else {
       setFareDetails(null);
     }
-  }, [origin?.lat, origin?.lng, destination?.lat, destination?.lng, vehicleType, departureDate, user?.city]);
+  }, [originCoords?.lat, originCoords?.lng, destCoords?.lat, destCoords?.lng, vehicleType, departureDate, user?.city]);
 
   function handleVehicleTypeChange(type: VehicleType) {
     setVehicleType(type);
@@ -230,7 +459,7 @@ export default function OfferRideScreen() {
     return date.toLocaleTimeString('en-IN', { hour: 'numeric', minute: '2-digit', hour12: true });
   }
 
-  // Determine verified vehicles from profile settings
+  // Vehicle capabilities from profile
   const primaryType = verification?.vehicle_type;
   const secondaryType = verification?.secondary_vehicle_type;
 
@@ -241,7 +470,6 @@ export default function OfferRideScreen() {
   const hasBike = (hasPrimary && primaryType === 'bike') || (hasSecondary && secondaryType === 'bike');
   const hasBothVehicles = hasCar && hasBike;
 
-  // Specific vehicle strings from profile
   const carDetails = primaryType === 'car'
     ? [verification?.vehicle_make, verification?.vehicle_model, verification?.vehicle_plate].filter(Boolean).join(' • ')
     : secondaryType === 'car'
@@ -273,11 +501,11 @@ export default function OfferRideScreen() {
       return;
     }
 
-    if (!origin) {
+    if (!origin.trim() || !originCoords) {
       setError('Please select a pickup location.');
       return;
     }
-    if (!destination) {
+    if (!destination.trim() || !destCoords) {
       setError('Please select a drop-off destination.');
       return;
     }
@@ -303,7 +531,6 @@ export default function OfferRideScreen() {
 
     setLoading(true);
 
-    // Auto-generate standard notes
     let autoNotes = '🛣️ Main road pickup only (No home doorstep detour)';
     if (vehicleType === 'bike' && helmetProvided) {
       autoNotes += '\n🪖 Helmet provided for passenger';
@@ -314,12 +541,12 @@ export default function OfferRideScreen() {
     }
 
     const { error: apiError } = await api.createRide({
-      origin: origin.name,
-      origin_lat: origin.lat,
-      origin_lng: origin.lng,
-      destination: destination.name,
-      dest_lat: destination.lat,
-      dest_lng: destination.lng,
+      origin: origin.trim(),
+      origin_lat: originCoords.lat,
+      origin_lng: originCoords.lng,
+      destination: destination.trim(),
+      dest_lat: destCoords.lat,
+      dest_lng: destCoords.lng,
       departure_time: adjustedDeparture.toISOString(),
       seats_total: vehicleType === 'bike' ? 1 : seats,
       price_per_seat: calculatedFare,
@@ -346,18 +573,19 @@ export default function OfferRideScreen() {
     );
   }
 
-  const bottomSafePadding = Math.max(insets.bottom, Platform.OS === 'android' ? 24 : 16) + 72;
+  const mapHeight = hasRoute ? 230 : Math.max(380, windowHeight - insets.top - insets.bottom - 175);
+  const bottomSafePadding = Math.max(insets.bottom, Platform.OS === 'android' ? 24 : 16) + 40;
 
   return (
     <SafeAreaView style={styles.container} edges={['top']}>
-      {/* 1. MODERN TOP HEADER */}
+      {/* 1. TOP HEADER */}
       <View style={styles.header}>
         <TouchableOpacity
           style={styles.backBtn}
           onPress={() => router.back()}
           activeOpacity={0.7}
         >
-          <ArrowLeft size={22} color={Colors.neutral[800]} strokeWidth={2.4} />
+          <ArrowLeft size={20} color={Colors.neutral[800]} strokeWidth={2.4} />
         </TouchableOpacity>
 
         <View style={styles.headerTitleWrap}>
@@ -365,7 +593,7 @@ export default function OfferRideScreen() {
           <Text style={styles.headerSubtitle}>Share commute • Zero commission</Text>
         </View>
 
-        {/* Driver Verification Pill */}
+        {/* Driver Verification Status */}
         <TouchableOpacity
           style={[styles.statusPill, isVerified ? styles.statusPillVerified : styles.statusPillUnverified]}
           onPress={() => {
@@ -387,383 +615,485 @@ export default function OfferRideScreen() {
         </TouchableOpacity>
       </View>
 
-      {/* 2. SCROLLABLE FORM CONTENT */}
-      <ScrollView
-        style={styles.scrollView}
-        contentContainerStyle={{ paddingHorizontal: Spacing.md, paddingTop: Spacing.sm, paddingBottom: bottomSafePadding }}
-        keyboardShouldPersistTaps="handled"
-        showsVerticalScrollIndicator={false}
-      >
-        {/* CARD 1: UNIFIED ROUTE CARD */}
-        <View style={styles.card}>
-          <View style={styles.cardHeaderRow}>
-            <View style={styles.cardIconCircle}>
-              <Navigation size={16} color={Colors.primary[600]} strokeWidth={2.4} />
-            </View>
-            <Text style={styles.cardHeading}>Route Details</Text>
+      {/* 2. TOP FROM / TO SEARCH BAR */}
+      <View style={styles.searchBarWrapper}>
+        <View style={styles.searchCard}>
+          {/* Pickup (From) Row */}
+          <View style={styles.inputRow}>
+            <View style={[styles.routeDot, { backgroundColor: '#16a34a' }]} />
+            <TextInput
+              style={styles.textInput}
+              placeholder={detectingGps ? 'Locating via GPS...' : 'From (Current Location / Landmark)'}
+              placeholderTextColor="#94a3b8"
+              value={origin}
+              onChangeText={(text) => {
+                setOrigin(text);
+                handleSearchAddress(text, 'origin');
+              }}
+              onFocus={() => {
+                setActiveInput('origin');
+                if (origin.trim().length >= 2) handleSearchAddress(origin, 'origin');
+              }}
+              returnKeyType="next"
+            />
+            {origin.length > 0 ? (
+              <TouchableOpacity
+                style={styles.clearBtn}
+                onPress={handleClearOrigin}
+                hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
+              >
+                <X size={15} color="#94a3b8" />
+              </TouchableOpacity>
+            ) : (
+              <TouchableOpacity
+                style={styles.gpsBtn}
+                onPress={() => useCurrentLocationForOrigin(true)}
+                hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
+              >
+                {detectingGps ? (
+                  <ActivityIndicator size="small" color="#0284c7" />
+                ) : (
+                  <Crosshair size={16} color="#0284c7" />
+                )}
+              </TouchableOpacity>
+            )}
           </View>
 
-          <View style={styles.routeContainer}>
-            <LocationPicker
-              label="Pickup Location (Main road / Landmark)"
-              value={origin?.name || ''}
-              onSelect={setOrigin}
-              markerColor="#16a34a"
-              city={user?.city}
-              cityLat={cityData?.lat}
-              cityLng={cityData?.lng}
+          <View style={styles.inputDivider} />
+
+          {/* Drop-off (To) Row */}
+          <View style={styles.inputRow}>
+            <View style={[styles.routeDot, { backgroundColor: '#f59e0b' }]} />
+            <TextInput
+              style={styles.textInput}
+              placeholder="Enter destination"
+              placeholderTextColor="#94a3b8"
+              value={destination}
+              onChangeText={(text) => {
+                setDestination(text);
+                handleSearchAddress(text, 'dest');
+              }}
+              onFocus={() => {
+                setActiveInput('dest');
+                if (destination.trim().length >= 2) handleSearchAddress(destination, 'dest');
+              }}
+              onBlur={() => resolveDestinationCoords(destination)}
+              returnKeyType="done"
+              onSubmitEditing={() => {
+                if (destination.trim()) {
+                  resolveDestinationCoords(destination);
+                  setSuggestions([]);
+                  setActiveInput(null);
+                }
+              }}
             />
-
-            <View style={styles.routeConnectorWrap}>
-              <View style={styles.routeDottedLine} />
-            </View>
-
-            <LocationPicker
-              label="Drop-off Destination"
-              value={destination?.name || ''}
-              onSelect={setDestination}
-              markerColor="#d97706"
-              city={user?.city}
-              cityLat={cityData?.lat}
-              cityLng={cityData?.lng}
-            />
-          </View>
-
-          {/* Minimalist Main Road Policy Tag */}
-          <View style={styles.policyTag}>
-            <Info size={13} color={Colors.primary[700]} strokeWidth={2.2} />
-            <Text style={styles.policyTagText}>
-              Main road pickup only: Passengers walk to your route. No doorstep detours.
-            </Text>
+            {destination.length > 0 && (
+              <TouchableOpacity
+                style={styles.clearBtn}
+                onPress={handleClearDest}
+                hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
+              >
+                <X size={15} color="#94a3b8" />
+              </TouchableOpacity>
+            )}
           </View>
         </View>
 
-        {/* CARD 2: VEHICLE & CAPACITY (BASED ON PROFILE SETTINGS) */}
-        <View style={styles.card}>
-          <View style={styles.cardHeaderRow}>
-            <View style={[styles.cardIconCircle, { backgroundColor: vehicleType === 'bike' ? '#fef3c7' : '#e0f2fe' }]}>
-              {vehicleType === 'bike' ? (
-                <Bike size={16} color="#d97706" strokeWidth={2.4} />
-              ) : (
-                <Car size={16} color={Colors.primary[600]} strokeWidth={2.4} />
-              )}
-            </View>
-            <Text style={styles.cardHeading}>
-              {hasBothVehicles ? 'Select Vehicle & Seats' : vehicleType === 'bike' ? 'Vehicle: Bike Pool' : 'Vehicle: Car Pool'}
-            </Text>
-          </View>
-
-          {/* 1. Only show both Car Pool and Bike Pool buttons when the user uploaded BOTH RCs */}
-          {hasBothVehicles ? (
-            <View style={styles.vehicleSegment}>
+        {/* Live Address Suggestions Dropdown */}
+        {suggestions.length > 0 && activeInput && (
+          <View style={styles.suggestionsCard}>
+            <View style={styles.suggestionsHeaderRow}>
+              <Text style={styles.suggestionsHeaderTitle}>
+                {searchingAddress ? 'Searching Addresses...' : 'Select Address'}
+              </Text>
               <TouchableOpacity
-                style={[styles.vehicleTab, vehicleType === 'car' && styles.vehicleTabActive]}
-                onPress={() => handleVehicleTypeChange('car')}
-                activeOpacity={0.85}
+                onPress={() => {
+                  setSuggestions([]);
+                  setActiveInput(null);
+                }}
+                hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
               >
-                <Car
-                  size={18}
-                  color={vehicleType === 'car' ? '#ffffff' : Colors.neutral[600]}
-                  strokeWidth={2.2}
-                />
-                <Text style={[styles.vehicleTabText, vehicleType === 'car' && styles.vehicleTabTextActive]}>
-                  Car Pool
-                </Text>
-              </TouchableOpacity>
-
-              <TouchableOpacity
-                style={[styles.vehicleTab, vehicleType === 'bike' && styles.vehicleTabActive]}
-                onPress={() => handleVehicleTypeChange('bike')}
-                activeOpacity={0.85}
-              >
-                <Bike
-                  size={18}
-                  color={vehicleType === 'bike' ? '#ffffff' : Colors.neutral[600]}
-                  strokeWidth={2.2}
-                />
-                <Text style={[styles.vehicleTabText, vehicleType === 'bike' && styles.vehicleTabTextActive]}>
-                  Bike Pool
-                </Text>
+                <X size={14} color="#64748b" />
               </TouchableOpacity>
             </View>
-          ) : hasBike && !hasCar ? (
-            /* 2. User uploaded ONLY Bike RC in Profile -> ONLY show Bike Pool */
-            <View style={styles.singleVehicleCard}>
-              <View style={[styles.singleVehicleIconWrap, { backgroundColor: '#fef3c7' }]}>
-                <Bike size={22} color="#d97706" strokeWidth={2.4} />
-              </View>
-              <View style={{ flex: 1 }}>
-                <View style={styles.singleVehicleTitleRow}>
-                  <Text style={styles.singleVehicleTitle}>Bike Pool</Text>
-                  <View style={styles.singleVehicleVerifiedPill}>
-                    <ShieldCheck size={11} color="#15803d" strokeWidth={2.4} />
-                    <Text style={styles.singleVehicleVerifiedText}>Registered Bike</Text>
-                  </View>
-                </View>
-                <Text style={styles.singleVehicleModelText} numberOfLines={1}>
-                  {bikeDetails || 'Personal Two-Wheeler'}
-                </Text>
-              </View>
-            </View>
-          ) : hasCar && !hasBike ? (
-            /* 3. User uploaded ONLY Car RC in Profile -> ONLY show Car Pool */
-            <View style={styles.singleVehicleCard}>
-              <View style={[styles.singleVehicleIconWrap, { backgroundColor: '#e0f2fe' }]}>
-                <Car size={22} color={Colors.primary[600]} strokeWidth={2.4} />
-              </View>
-              <View style={{ flex: 1 }}>
-                <View style={styles.singleVehicleTitleRow}>
-                  <Text style={styles.singleVehicleTitle}>Car Pool</Text>
-                  <View style={styles.singleVehicleVerifiedPill}>
-                    <ShieldCheck size={11} color="#15803d" strokeWidth={2.4} />
-                    <Text style={styles.singleVehicleVerifiedText}>Registered Car</Text>
-                  </View>
-                </View>
-                <Text style={styles.singleVehicleModelText} numberOfLines={1}>
-                  {carDetails || 'Personal Car'}
-                </Text>
-              </View>
-            </View>
-          ) : (
-            /* 4. No Vehicle RC registered yet */
-            <View style={styles.unverifiedVehicleCard}>
-              <Info size={18} color="#b45309" strokeWidth={2.2} />
-              <View style={{ flex: 1 }}>
-                <Text style={styles.unverifiedVehicleTitle}>No Vehicle RC Registered</Text>
-                <Text style={styles.unverifiedVehicleSub}>
-                  Upload your Car or Bike RC in Profile Settings to unlock ride publishing.
-                </Text>
+            <ScrollView
+              style={styles.suggestionsList}
+              keyboardShouldPersistTaps="handled"
+              nestedScrollEnabled
+            >
+              {suggestions.map((item, idx) => (
                 <TouchableOpacity
-                  style={styles.addVehicleBtn}
-                  onPress={() => router.push('/(tabs)/profile')}
+                  key={`${item.name}-${idx}`}
+                  style={styles.suggestionItem}
+                  onPress={() => handleSelectSuggestion(item)}
+                  activeOpacity={0.75}
+                >
+                  <View style={styles.suggestionPinCircle}>
+                    <MapPin size={15} color="#0284c7" strokeWidth={2.2} />
+                  </View>
+                  <View style={styles.suggestionTextWrap}>
+                    <Text style={styles.suggestionTitle} numberOfLines={1}>
+                      {item.name}
+                    </Text>
+                    <Text style={styles.suggestionSub} numberOfLines={1}>
+                      {item.address}
+                    </Text>
+                  </View>
+                  <ChevronRight size={14} color="#94a3b8" />
+                </TouchableOpacity>
+              ))}
+            </ScrollView>
+          </View>
+        )}
+      </View>
+
+      {/* 3. SCROLLABLE BODY */}
+      <ScrollView
+        ref={scrollViewRef}
+        style={styles.scrollArea}
+        contentContainerStyle={{
+          flexGrow: 1,
+          paddingBottom: hasRoute ? bottomSafePadding : 0,
+        }}
+        scrollEnabled={hasRoute}
+        showsVerticalScrollIndicator={false}
+        keyboardShouldPersistTaps="handled"
+      >
+        {/* INTERACTIVE LEAFLET ROUTE MAP */}
+        <View style={[styles.mapContainer, { height: mapHeight }]}>
+          <RoutePreviewMap
+            originLat={originCoords?.lat}
+            originLng={originCoords?.lng}
+            originName={origin || 'Pickup'}
+            destLat={destCoords?.lat}
+            destLng={destCoords?.lng}
+            destName={destination || 'Destination'}
+            height={mapHeight}
+            onMapClick={handleMapLocationSelect}
+          />
+          {!hasRoute && (
+            <View style={styles.mapHintBadge} pointerEvents="none">
+              <MapPin size={13} color="#0284c7" strokeWidth={2.4} />
+              <Text style={styles.mapHintText}>Tap anywhere on map to select destination</Text>
+            </View>
+          )}
+        </View>
+
+        {/* STEP-BY-STEP FLOW (REVEALED ONLY AFTER DESTINATION ADDRESS IS SELECTED) */}
+        {hasRoute && (
+          <View style={styles.stepsContainer}>
+            {/* STEP 1: COMMUTE SCHEDULE */}
+            <View style={styles.stepSection}>
+              <View style={styles.stepHeaderRow}>
+                <View style={styles.stepBadge}>
+                  <Text style={styles.stepBadgeText}>1</Text>
+                </View>
+                <Text style={styles.stepTitle}>Commute Schedule</Text>
+              </View>
+
+              {/* Date & Time Selectors */}
+              <View style={styles.dateTimeGrid}>
+                <TouchableOpacity
+                  style={styles.dateTimeTile}
+                  onPress={handleOpenDatePicker}
                   activeOpacity={0.8}
                 >
-                  <Text style={styles.addVehicleBtnText}>Add Vehicle RC in Profile →</Text>
+                  <Calendar size={18} color={Colors.primary[600]} strokeWidth={2.2} />
+                  <View style={styles.dateTimeTileTexts}>
+                    <Text style={styles.dateTimeTileLabel}>Date</Text>
+                    <Text style={styles.dateTimeTileValue}>{formatDate(departureDate)}</Text>
+                  </View>
+                </TouchableOpacity>
+
+                <TouchableOpacity
+                  style={styles.dateTimeTile}
+                  onPress={handleOpenTimePicker}
+                  activeOpacity={0.8}
+                >
+                  <Clock size={18} color={Colors.primary[600]} strokeWidth={2.2} />
+                  <View style={styles.dateTimeTileTexts}>
+                    <Text style={styles.dateTimeTileLabel}>Time</Text>
+                    <Text style={styles.dateTimeTileValue}>{formatTime(departureDate)}</Text>
+                  </View>
                 </TouchableOpacity>
               </View>
-            </View>
-          )}
 
-          {/* If Car is active */}
-          {vehicleType === 'car' && (hasCar || (!hasCar && !hasBike)) && (
-            <View style={styles.seatSection}>
-              <Text style={styles.inputLabel}>Available Passenger Seats</Text>
-              <View style={styles.seatPillRow}>
-                {[1, 2, 3, 4, 5, 6].map((n) => (
-                  <TouchableOpacity
-                    key={n}
-                    style={[styles.seatPill, seats === n && styles.seatPillActive]}
-                    onPress={() => setSeats(n)}
-                    activeOpacity={0.8}
-                  >
-                    <Text style={[styles.seatPillText, seats === n && styles.seatPillTextActive]}>
-                      {n}
-                    </Text>
-                  </TouchableOpacity>
-                ))}
-              </View>
-            </View>
-          )}
-
-          {/* If Bike is active */}
-          {vehicleType === 'bike' && (hasBike || (!hasCar && !hasBike)) && (
-            <View style={styles.bikeSection}>
-              <View style={styles.bikeInfoRow}>
-                <View style={styles.bikeSeatNotice}>
-                  <Users size={14} color="#d97706" strokeWidth={2.4} />
-                  <Text style={styles.bikeSeatNoticeText}>1 Pillion Seat Available</Text>
-                </View>
-              </View>
-
-              <View style={styles.helmetRow}>
-                <View style={{ flex: 1 }}>
-                  <Text style={styles.helmetTitle}>Spare Helmet for Co-Rider 🪖</Text>
-                  <Text style={styles.helmetSubtitle}>Ensure rider safety with a certified helmet</Text>
+              {/* Daily Repeat Commute Switch */}
+              <View style={styles.repeatToggleRow}>
+                <View style={styles.repeatToggleLeft}>
+                  <RefreshCw size={16} color={isDaily ? Colors.primary[600] : Colors.neutral[500]} strokeWidth={2.2} />
+                  <View style={{ flex: 1, marginLeft: 8 }}>
+                    <Text style={styles.repeatToggleTitle}>Recurring Daily Commute</Text>
+                    <Text style={styles.repeatToggleSub}>Automatically repeat every week</Text>
+                  </View>
                 </View>
                 <Switch
-                  value={helmetProvided}
-                  onValueChange={setHelmetProvided}
+                  value={isDaily}
+                  onValueChange={setIsDaily}
                   trackColor={{ false: '#e2e8f0', true: '#bae6fd' }}
-                  thumbColor={helmetProvided ? Colors.primary[600] : '#94a3b8'}
+                  thumbColor={isDaily ? Colors.primary[600] : '#94a3b8'}
                 />
               </View>
-            </View>
-          )}
 
-          {/* If has both vehicles, display active vehicle name below */}
-          {hasBothVehicles && (
-            <View style={styles.registeredVehicleNote}>
-              <Text style={styles.registeredVehicleText} numberOfLines={1}>
-                {vehicleType === 'car' ? `🚗 Active: ${carDetails || 'Personal Car'}` : `🏍️ Active: ${bikeDetails || 'Personal Bike'}`}
-              </Text>
-            </View>
-          )}
-        </View>
-
-        {/* CARD 3: SCHEDULE & COMMUTE FREQUENCY */}
-        <View style={styles.card}>
-          <View style={styles.cardHeaderRow}>
-            <View style={[styles.cardIconCircle, { backgroundColor: '#fef3c7' }]}>
-              <Clock size={16} color="#d97706" strokeWidth={2.4} />
-            </View>
-            <Text style={styles.cardHeading}>Departure Time</Text>
-          </View>
-
-          {/* Date & Time Selectors */}
-          <View style={styles.dateTimeGrid}>
-            <TouchableOpacity
-              style={styles.dateTimeTile}
-              onPress={handleOpenDatePicker}
-              activeOpacity={0.8}
-            >
-              <Calendar size={18} color={Colors.primary[600]} strokeWidth={2.2} />
-              <View style={styles.dateTimeTileTexts}>
-                <Text style={styles.dateTimeTileLabel}>Date</Text>
-                <Text style={styles.dateTimeTileValue}>{formatDate(departureDate)}</Text>
-              </View>
-            </TouchableOpacity>
-
-            <TouchableOpacity
-              style={styles.dateTimeTile}
-              onPress={handleOpenTimePicker}
-              activeOpacity={0.8}
-            >
-              <Clock size={18} color={Colors.primary[600]} strokeWidth={2.2} />
-              <View style={styles.dateTimeTileTexts}>
-                <Text style={styles.dateTimeTileLabel}>Time</Text>
-                <Text style={styles.dateTimeTileValue}>{formatTime(departureDate)}</Text>
-              </View>
-            </TouchableOpacity>
-          </View>
-
-          {/* Daily Repeat Commute Switch */}
-          <View style={styles.repeatToggleRow}>
-            <View style={styles.repeatToggleLeft}>
-              <RefreshCw size={16} color={isDaily ? Colors.primary[600] : Colors.neutral[500]} strokeWidth={2.2} />
-              <View style={{ flex: 1, marginLeft: 8 }}>
-                <Text style={styles.repeatToggleTitle}>Recurring Daily Commute</Text>
-                <Text style={styles.repeatToggleSub}>Automatically repeat every week</Text>
-              </View>
-            </View>
-            <Switch
-              value={isDaily}
-              onValueChange={setIsDaily}
-              trackColor={{ false: '#e2e8f0', true: '#bae6fd' }}
-              thumbColor={isDaily ? Colors.primary[600] : '#94a3b8'}
-            />
-          </View>
-
-          {/* Weekday Selection when Daily is On */}
-          {isDaily && (
-            <View style={styles.dailyDaysContainer}>
-              <View style={styles.presetButtonsRow}>
-                <TouchableOpacity
-                  style={[
-                    styles.presetBtn,
-                    selectedDays.length === 5 && !selectedDays.includes('Sat') && !selectedDays.includes('Sun') && styles.presetBtnActive,
-                  ]}
-                  onPress={() => setSelectedDays(['Mon', 'Tue', 'Wed', 'Thu', 'Fri'])}
-                  activeOpacity={0.8}
-                >
-                  <Text style={[
-                    styles.presetBtnText,
-                    selectedDays.length === 5 && !selectedDays.includes('Sat') && !selectedDays.includes('Sun') && styles.presetBtnTextActive,
-                  ]}>
-                    Weekdays (Mon–Fri)
-                  </Text>
-                </TouchableOpacity>
-
-                <TouchableOpacity
-                  style={[styles.presetBtn, selectedDays.length === 7 && styles.presetBtnActive]}
-                  onPress={() => setSelectedDays(ALL_WEEK_DAYS)}
-                  activeOpacity={0.8}
-                >
-                  <Text style={[styles.presetBtnText, selectedDays.length === 7 && styles.presetBtnTextActive]}>
-                    All 7 Days
-                  </Text>
-                </TouchableOpacity>
-              </View>
-
-              <View style={styles.daysChipsRow}>
-                {ALL_WEEK_DAYS.map((day) => {
-                  const isSelected = selectedDays.includes(day);
-                  return (
+              {/* Weekday Selection when Daily is On */}
+              {isDaily && (
+                <View style={styles.dailyDaysContainer}>
+                  <View style={styles.presetButtonsRow}>
                     <TouchableOpacity
-                      key={day}
-                      style={[styles.dayChip, isSelected && styles.dayChipActive]}
-                      onPress={() => toggleDay(day)}
+                      style={[
+                        styles.presetBtn,
+                        selectedDays.length === 5 && !selectedDays.includes('Sat') && !selectedDays.includes('Sun') && styles.presetBtnActive,
+                      ]}
+                      onPress={() => setSelectedDays(['Mon', 'Tue', 'Wed', 'Thu', 'Fri'])}
                       activeOpacity={0.8}
                     >
-                      <Text style={[styles.dayChipText, isSelected && styles.dayChipTextActive]}>
-                        {day}
+                      <Text style={[
+                        styles.presetBtnText,
+                        selectedDays.length === 5 && !selectedDays.includes('Sat') && !selectedDays.includes('Sun') && styles.presetBtnTextActive,
+                      ]}>
+                        Weekdays (Mon–Fri)
                       </Text>
                     </TouchableOpacity>
-                  );
-                })}
-              </View>
-            </View>
-          )}
-        </View>
 
-        {/* CARD 4: SMART AUTO-FARE CARD */}
-        {fareDetails ? (
-          <View style={styles.fareCard}>
-            <View style={styles.fareTopRow}>
-              <View>
-                <Text style={styles.fareTitle}>Suggested Shared Fare</Text>
-                <Text style={styles.fareSub}>
-                  {fareDetails.distanceKm} km · ~{Math.max(5, Math.round(fareDetails.distanceKm * 2.5))} mins
+                    <TouchableOpacity
+                      style={[styles.presetBtn, selectedDays.length === 7 && styles.presetBtnActive]}
+                      onPress={() => setSelectedDays(ALL_WEEK_DAYS)}
+                      activeOpacity={0.8}
+                    >
+                      <Text style={[styles.presetBtnText, selectedDays.length === 7 && styles.presetBtnTextActive]}>
+                        All 7 Days
+                      </Text>
+                    </TouchableOpacity>
+                  </View>
+
+                  <View style={styles.daysChipsRow}>
+                    {ALL_WEEK_DAYS.map((day) => {
+                      const isSelected = selectedDays.includes(day);
+                      return (
+                        <TouchableOpacity
+                          key={day}
+                          style={[styles.dayChip, isSelected && styles.dayChipActive]}
+                          onPress={() => toggleDay(day)}
+                          activeOpacity={0.8}
+                        >
+                          <Text style={[styles.dayChipText, isSelected && styles.dayChipTextActive]}>
+                            {day}
+                          </Text>
+                        </TouchableOpacity>
+                      );
+                    })}
+                  </View>
+                </View>
+              )}
+            </View>
+
+            {/* STEP 2: VEHICLE & CAPACITY */}
+            <View style={styles.stepSection}>
+              <View style={styles.stepHeaderRow}>
+                <View style={styles.stepBadge}>
+                  <Text style={styles.stepBadgeText}>2</Text>
+                </View>
+                <Text style={styles.stepTitle}>Vehicle & Capacity</Text>
+              </View>
+
+              {/* Vehicle Options based on verified RC */}
+              {hasBothVehicles ? (
+                <View style={styles.vehicleSegment}>
+                  <TouchableOpacity
+                    style={[styles.vehicleTab, vehicleType === 'car' && styles.vehicleTabActive]}
+                    onPress={() => handleVehicleTypeChange('car')}
+                    activeOpacity={0.85}
+                  >
+                    <Car
+                      size={18}
+                      color={vehicleType === 'car' ? '#ffffff' : Colors.neutral[600]}
+                      strokeWidth={2.2}
+                    />
+                    <Text style={[styles.vehicleTabText, vehicleType === 'car' && styles.vehicleTabTextActive]}>
+                      Car Pool
+                    </Text>
+                  </TouchableOpacity>
+
+                  <TouchableOpacity
+                    style={[styles.vehicleTab, vehicleType === 'bike' && styles.vehicleTabActive]}
+                    onPress={() => handleVehicleTypeChange('bike')}
+                    activeOpacity={0.85}
+                  >
+                    <Bike
+                      size={18}
+                      color={vehicleType === 'bike' ? '#ffffff' : Colors.neutral[600]}
+                      strokeWidth={2.2}
+                    />
+                    <Text style={[styles.vehicleTabText, vehicleType === 'bike' && styles.vehicleTabTextActive]}>
+                      Bike Pool
+                    </Text>
+                  </TouchableOpacity>
+                </View>
+              ) : hasBike && !hasCar ? (
+                <View style={styles.singleVehicleCard}>
+                  <View style={[styles.singleVehicleIconWrap, { backgroundColor: '#fef3c7' }]}>
+                    <Bike size={22} color="#d97706" strokeWidth={2.4} />
+                  </View>
+                  <View style={{ flex: 1 }}>
+                    <View style={styles.singleVehicleTitleRow}>
+                      <Text style={styles.singleVehicleTitle}>Bike Pool</Text>
+                      <View style={styles.singleVehicleVerifiedPill}>
+                        <ShieldCheck size={11} color="#15803d" strokeWidth={2.4} />
+                        <Text style={styles.singleVehicleVerifiedText}>Registered Bike</Text>
+                      </View>
+                    </View>
+                    <Text style={styles.singleVehicleModelText} numberOfLines={1}>
+                      {bikeDetails || 'Personal Two-Wheeler'}
+                    </Text>
+                  </View>
+                </View>
+              ) : hasCar && !hasBike ? (
+                <View style={styles.singleVehicleCard}>
+                  <View style={[styles.singleVehicleIconWrap, { backgroundColor: '#e0f2fe' }]}>
+                    <Car size={22} color={Colors.primary[600]} strokeWidth={2.4} />
+                  </View>
+                  <View style={{ flex: 1 }}>
+                    <View style={styles.singleVehicleTitleRow}>
+                      <Text style={styles.singleVehicleTitle}>Car Pool</Text>
+                      <View style={styles.singleVehicleVerifiedPill}>
+                        <ShieldCheck size={11} color="#15803d" strokeWidth={2.4} />
+                        <Text style={styles.singleVehicleVerifiedText}>Registered Car</Text>
+                      </View>
+                    </View>
+                    <Text style={styles.singleVehicleModelText} numberOfLines={1}>
+                      {carDetails || 'Personal Car'}
+                    </Text>
+                  </View>
+                </View>
+              ) : (
+                <View style={styles.unverifiedVehicleCard}>
+                  <Info size={18} color="#b45309" strokeWidth={2.2} />
+                  <View style={{ flex: 1 }}>
+                    <Text style={styles.unverifiedVehicleTitle}>No Vehicle RC Registered</Text>
+                    <Text style={styles.unverifiedVehicleSub}>
+                      Upload your Car or Bike RC in Profile Settings to unlock ride publishing.
+                    </Text>
+                    <TouchableOpacity
+                      style={styles.addVehicleBtn}
+                      onPress={() => router.push('/(tabs)/profile')}
+                      activeOpacity={0.8}
+                    >
+                      <Text style={styles.addVehicleBtnText}>Add Vehicle RC in Profile →</Text>
+                    </TouchableOpacity>
+                  </View>
+                </View>
+              )}
+
+              {/* Car Passenger Seats */}
+              {vehicleType === 'car' && (hasCar || (!hasCar && !hasBike)) && (
+                <View style={styles.seatSection}>
+                  <Text style={styles.inputLabel}>Available Passenger Seats</Text>
+                  <View style={styles.seatPillRow}>
+                    {[1, 2, 3, 4, 5, 6].map((n) => (
+                      <TouchableOpacity
+                        key={n}
+                        style={[styles.seatPill, seats === n && styles.seatPillActive]}
+                        onPress={() => setSeats(n)}
+                        activeOpacity={0.8}
+                      >
+                        <Text style={[styles.seatPillText, seats === n && styles.seatPillTextActive]}>
+                          {n}
+                        </Text>
+                      </TouchableOpacity>
+                    ))}
+                  </View>
+                </View>
+              )}
+
+              {/* Bike Pillion & Helmet */}
+              {vehicleType === 'bike' && (hasBike || (!hasCar && !hasBike)) && (
+                <View style={styles.bikeSection}>
+                  <View style={styles.bikeInfoRow}>
+                    <View style={styles.bikeSeatNotice}>
+                      <Users size={14} color="#d97706" strokeWidth={2.4} />
+                      <Text style={styles.bikeSeatNoticeText}>1 Pillion Seat Available</Text>
+                    </View>
+                  </View>
+
+                  <View style={styles.helmetRow}>
+                    <View style={{ flex: 1 }}>
+                      <Text style={styles.helmetTitle}>Spare Helmet for Co-Rider 🪖</Text>
+                      <Text style={styles.helmetSubtitle}>Ensure rider safety with a certified helmet</Text>
+                    </View>
+                    <Switch
+                      value={helmetProvided}
+                      onValueChange={setHelmetProvided}
+                      trackColor={{ false: '#e2e8f0', true: '#bae6fd' }}
+                      thumbColor={helmetProvided ? Colors.primary[600] : '#94a3b8'}
+                    />
+                  </View>
+                </View>
+              )}
+
+              {/* Suggested Auto-Fare Card */}
+              {fareDetails && (
+                <View style={styles.fareCard}>
+                  <View style={styles.fareTopRow}>
+                    <View>
+                      <Text style={styles.fareTitle}>Suggested Shared Commute Fare</Text>
+                      <Text style={styles.fareSub}>
+                        {fareDetails.distanceKm} km · ~{Math.max(5, Math.round(fareDetails.distanceKm * 2.5))} mins
+                      </Text>
+                    </View>
+                    <View style={styles.fareBadge}>
+                      <Text style={styles.farePrice}>₹{fareDetails.suggestedFare}</Text>
+                      <Text style={styles.fareUnit}>{vehicleType === 'bike' ? '/ pillion' : '/ seat'}</Text>
+                    </View>
+                  </View>
+
+                  <View style={styles.fareDivider} />
+
+                  <View style={styles.fareFooterRow}>
+                    <Check size={14} color="#16a34a" strokeWidth={2.2} />
+                    <Text style={styles.fareFooterText}>
+                      Direct Cash / UPI payment to you on drop-off • 0% commission
+                    </Text>
+                  </View>
+                </View>
+              )}
+
+              {/* Main Road Policy Reminder */}
+              <View style={styles.policyTag}>
+                <Info size={13} color={Colors.primary[700]} strokeWidth={2.2} />
+                <Text style={styles.policyTagText}>
+                  Main road pickup only: Passengers walk to your route. No doorstep detours.
                 </Text>
               </View>
-              <View style={styles.fareBadge}>
-                <Text style={styles.farePrice}>₹{fareDetails.suggestedFare}</Text>
-                <Text style={styles.fareUnit}>{vehicleType === 'bike' ? '/ pillion' : '/ seat'}</Text>
+            </View>
+
+            {/* ERROR NOTICE */}
+            {error && (
+              <View style={styles.errorBox}>
+                <Text style={styles.errorText}>{error}</Text>
               </View>
-            </View>
+            )}
 
-            <View style={styles.fareDivider} />
-
-            <View style={styles.fareFooterRow}>
-              <Sparkles size={14} color="#16a34a" strokeWidth={2.2} />
-              <Text style={styles.fareFooterText}>
-                Direct Cash / UPI payment to you on drop-off • 0% commission
-              </Text>
-            </View>
-          </View>
-        ) : (
-          <View style={styles.farePendingCard}>
-            <MapPin size={18} color={Colors.neutral[400]} />
-            <Text style={styles.farePendingText}>
-              Select pickup and drop-off points to automatically calculate the fair shared commute fare.
-            </Text>
-          </View>
-        )}
-
-        {/* ERROR NOTICE */}
-        {error && (
-          <View style={styles.errorBox}>
-            <Text style={styles.errorText}>{error}</Text>
+            {/* STEP 3: PUBLISH BUTTON */}
+            <TouchableOpacity
+              style={[styles.submitButton, loading && styles.submitButtonLoading]}
+              onPress={publishRide}
+              disabled={loading}
+              activeOpacity={0.88}
+            >
+              {loading ? (
+                <ActivityIndicator color="#ffffff" size="small" />
+              ) : (
+                <>
+                  <Check size={18} color="#ffffff" strokeWidth={2.6} />
+                  <Text style={styles.submitButtonText}>
+                    Publish {vehicleType === 'bike' ? 'Bike' : 'Car'} Ride
+                    {fareDetails ? ` · ₹${fareDetails.suggestedFare}` : ''}
+                  </Text>
+                </>
+              )}
+            </TouchableOpacity>
           </View>
         )}
-
-        {/* PUBLISH BUTTON */}
-        <TouchableOpacity
-          style={[styles.submitButton, loading && styles.submitButtonLoading]}
-          onPress={publishRide}
-          disabled={loading}
-          activeOpacity={0.88}
-        >
-          {loading ? (
-            <ActivityIndicator color="#ffffff" size="small" />
-          ) : (
-            <>
-              <Check size={18} color="#ffffff" strokeWidth={2.6} />
-              <Text style={styles.submitButtonText}>
-                Publish {vehicleType === 'bike' ? 'Bike' : 'Car'} Ride
-              </Text>
-            </>
-          )}
-        </TouchableOpacity>
       </ScrollView>
 
       {/* MODAL: iOS Native Date Picker */}
@@ -844,9 +1174,6 @@ const styles = StyleSheet.create({
     flex: 1,
     backgroundColor: '#f8fafc',
   },
-  scrollView: {
-    flex: 1,
-  },
 
   // 1. Top Header
   header: {
@@ -861,20 +1188,20 @@ const styles = StyleSheet.create({
     ...Shadow.sm,
   },
   backBtn: {
-    width: 38,
-    height: 38,
-    borderRadius: 19,
+    width: 36,
+    height: 36,
+    borderRadius: 18,
     alignItems: 'center',
     justifyContent: 'center',
     backgroundColor: '#f1f5f9',
   },
   headerTitleWrap: {
     flex: 1,
-    marginLeft: 12,
+    marginLeft: 10,
   },
   headerTitle: {
     fontFamily: 'Inter-Bold',
-    fontSize: 17,
+    fontSize: 16,
     color: Colors.neutral[900],
   },
   headerSubtitle: {
@@ -911,277 +1238,192 @@ const styles = StyleSheet.create({
     color: '#b45309',
   },
 
-  // Cards
-  card: {
+  // 2. Search Bar
+  searchBarWrapper: {
+    position: 'relative',
+    zIndex: 999,
+    paddingHorizontal: Spacing.md,
+    paddingTop: 8,
+    paddingBottom: 8,
     backgroundColor: '#ffffff',
-    borderRadius: 16,
-    padding: Spacing.md,
-    marginBottom: Spacing.sm,
-    borderWidth: 1,
-    borderColor: '#e2e8f0',
-    ...Shadow.sm,
+    borderBottomWidth: 1,
+    borderBottomColor: '#f1f5f9',
   },
-  cardHeaderRow: {
+  searchCard: {
+    backgroundColor: '#f8fafc',
+    borderRadius: 14,
+    borderWidth: 1.5,
+    borderColor: '#e2e8f0',
+    overflow: 'hidden',
+  },
+  inputRow: {
     flexDirection: 'row',
     alignItems: 'center',
-    gap: 8,
-    marginBottom: Spacing.sm,
+    paddingHorizontal: 12,
+    height: 44,
   },
-  cardIconCircle: {
+  routeDot: {
+    width: 9,
+    height: 9,
+    borderRadius: 5,
+    marginRight: 10,
+  },
+  textInput: {
+    flex: 1,
+    fontFamily: 'Inter-Medium',
+    fontSize: 13,
+    color: '#0f172a',
+    paddingVertical: 0,
+  },
+  inputDivider: {
+    height: 1,
+    backgroundColor: '#e2e8f0',
+    marginLeft: 31,
+  },
+  clearBtn: {
+    padding: 4,
+  },
+  gpsBtn: {
+    padding: 4,
+  },
+
+  // Suggestions Dropdown
+  suggestionsCard: {
+    position: 'absolute',
+    top: 102,
+    left: Spacing.md,
+    right: Spacing.md,
+    backgroundColor: '#ffffff',
+    borderRadius: 14,
+    borderWidth: 1,
+    borderColor: '#cbd5e1',
+    ...Shadow.lg,
+    zIndex: 9999,
+    maxHeight: 260,
+    elevation: 20,
+  },
+  suggestionsHeaderRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    paddingHorizontal: 14,
+    paddingVertical: 9,
+    backgroundColor: '#f8fafc',
+    borderTopLeftRadius: 13,
+    borderTopRightRadius: 13,
+    borderBottomWidth: 1,
+    borderBottomColor: '#e2e8f0',
+  },
+  suggestionsHeaderTitle: {
+    fontFamily: 'Inter-SemiBold',
+    fontSize: 11,
+    color: '#64748b',
+    textTransform: 'uppercase',
+  },
+  suggestionsList: {
+    maxHeight: 210,
+  },
+  suggestionItem: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    paddingHorizontal: 12,
+    paddingVertical: 10,
+    borderBottomWidth: 1,
+    borderBottomColor: '#f1f5f9',
+    gap: 10,
+  },
+  suggestionPinCircle: {
     width: 28,
     height: 28,
     borderRadius: 14,
-    backgroundColor: '#f0fdf4',
+    backgroundColor: '#e0f2fe',
     alignItems: 'center',
     justifyContent: 'center',
   },
-  cardHeading: {
-    fontFamily: 'Inter-Bold',
-    fontSize: 14,
-    color: Colors.neutral[900],
+  suggestionTextWrap: {
+    flex: 1,
+  },
+  suggestionTitle: {
+    fontFamily: 'Inter-SemiBold',
+    fontSize: 13,
+    color: '#0f172a',
+  },
+  suggestionSub: {
+    fontFamily: 'Inter-Regular',
+    fontSize: 11,
+    color: '#64748b',
+    marginTop: 1,
   },
 
-  // Route Section
-  routeContainer: {
-    gap: 2,
+  // 3. Map
+  scrollArea: {
+    flex: 1,
   },
-  routeConnectorWrap: {
-    paddingLeft: 19,
-    height: 12,
-    justifyContent: 'center',
+  mapContainer: {
+    position: 'relative',
+    width: '100%',
+    backgroundColor: '#e0f2fe',
+    overflow: 'hidden',
   },
-  routeDottedLine: {
-    width: 2,
-    height: 12,
-    backgroundColor: '#cbd5e1',
-  },
-  policyTag: {
+  mapHintBadge: {
+    position: 'absolute',
+    bottom: 16,
+    alignSelf: 'center',
     flexDirection: 'row',
     alignItems: 'center',
     gap: 6,
-    backgroundColor: '#f0f9ff',
-    paddingHorizontal: 10,
-    paddingVertical: 7,
-    borderRadius: 8,
-    marginTop: Spacing.sm,
+    backgroundColor: 'rgba(255, 255, 255, 0.95)',
+    paddingHorizontal: 14,
+    paddingVertical: 8,
+    borderRadius: Radius.full,
     borderWidth: 1,
     borderColor: '#bae6fd',
+    ...Shadow.md,
+    elevation: 8,
   },
-  policyTagText: {
-    flex: 1,
-    fontFamily: 'Inter-Medium',
-    fontSize: 11,
-    color: Colors.primary[800],
-    lineHeight: 15,
+  mapHintText: {
+    fontFamily: 'Inter-SemiBold',
+    fontSize: 12,
+    color: '#0369a1',
   },
 
-  // Vehicle Section
-  singleVehicleCard: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 12,
-    backgroundColor: '#f8fafc',
-    borderRadius: 12,
-    padding: 12,
+  // 4. Sequential Steps
+  stepsContainer: {
+    paddingHorizontal: Spacing.md,
+    paddingTop: Spacing.md,
+    gap: Spacing.sm,
+  },
+  stepSection: {
+    backgroundColor: '#ffffff',
+    borderRadius: 16,
+    padding: Spacing.md,
     borderWidth: 1,
     borderColor: '#e2e8f0',
+    ...Shadow.sm,
   },
-  singleVehicleIconWrap: {
-    width: 42,
-    height: 42,
-    borderRadius: 21,
+  stepHeaderRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+    marginBottom: Spacing.sm,
+  },
+  stepBadge: {
+    width: 22,
+    height: 22,
+    borderRadius: 11,
+    backgroundColor: Colors.primary[600],
     alignItems: 'center',
     justifyContent: 'center',
   },
-  singleVehicleTitleRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'space-between',
-    marginBottom: 2,
+  stepBadgeText: {
+    fontFamily: 'Inter-Bold',
+    fontSize: 11,
+    color: '#ffffff',
   },
-  singleVehicleTitle: {
+  stepTitle: {
     fontFamily: 'Inter-Bold',
     fontSize: 14,
     color: Colors.neutral[900],
-  },
-  singleVehicleModelText: {
-    fontFamily: 'Inter-Medium',
-    fontSize: 12,
-    color: Colors.neutral[600],
-  },
-  singleVehicleVerifiedPill: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 4,
-    backgroundColor: '#ecfdf5',
-    paddingHorizontal: 7,
-    paddingVertical: 2,
-    borderRadius: Radius.full,
-    borderWidth: 1,
-    borderColor: '#a7f3d0',
-  },
-  singleVehicleVerifiedText: {
-    fontFamily: 'Inter-SemiBold',
-    fontSize: 10,
-    color: '#15803d',
-  },
-  unverifiedVehicleCard: {
-    flexDirection: 'row',
-    alignItems: 'flex-start',
-    gap: 10,
-    backgroundColor: '#fffbeb',
-    padding: 12,
-    borderRadius: 12,
-    borderWidth: 1,
-    borderColor: '#fde68a',
-  },
-  unverifiedVehicleTitle: {
-    fontFamily: 'Inter-Bold',
-    fontSize: 13,
-    color: '#92400e',
-    marginBottom: 2,
-  },
-  unverifiedVehicleSub: {
-    fontFamily: 'Inter-Regular',
-    fontSize: 11,
-    color: '#b45309',
-    lineHeight: 16,
-    marginBottom: 8,
-  },
-  addVehicleBtn: {
-    alignSelf: 'flex-start',
-    backgroundColor: '#d97706',
-    paddingHorizontal: 10,
-    paddingVertical: 5,
-    borderRadius: 6,
-  },
-  addVehicleBtnText: {
-    fontFamily: 'Inter-SemiBold',
-    fontSize: 11,
-    color: '#ffffff',
-  },
-  vehicleSegment: {
-    flexDirection: 'row',
-    backgroundColor: '#f1f5f9',
-    borderRadius: 12,
-    padding: 3,
-    gap: 4,
-  },
-  vehicleTab: {
-    flex: 1,
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'center',
-    gap: 6,
-    paddingVertical: 9,
-    borderRadius: 9,
-  },
-  vehicleTabActive: {
-    backgroundColor: Colors.primary[600],
-    ...Shadow.sm,
-  },
-  vehicleTabText: {
-    fontFamily: 'Inter-Medium',
-    fontSize: 13,
-    color: Colors.neutral[600],
-  },
-  vehicleTabTextActive: {
-    fontFamily: 'Inter-SemiBold',
-    color: '#ffffff',
-  },
-
-  // Seats for Car
-  seatSection: {
-    marginTop: Spacing.sm,
-  },
-  inputLabel: {
-    fontFamily: 'Inter-SemiBold',
-    fontSize: 12,
-    color: Colors.neutral[700],
-    marginBottom: 6,
-  },
-  seatPillRow: {
-    flexDirection: 'row',
-    gap: 6,
-  },
-  seatPill: {
-    flex: 1,
-    paddingVertical: 8,
-    borderRadius: 10,
-    backgroundColor: '#f8fafc',
-    borderWidth: 1,
-    borderColor: '#e2e8f0',
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-  seatPillActive: {
-    backgroundColor: Colors.primary[600],
-    borderColor: Colors.primary[600],
-  },
-  seatPillText: {
-    fontFamily: 'Inter-SemiBold',
-    fontSize: 13,
-    color: Colors.neutral[700],
-  },
-  seatPillTextActive: {
-    color: '#ffffff',
-    fontFamily: 'Inter-Bold',
-  },
-
-  // Bike & Helmet Section
-  bikeSection: {
-    marginTop: Spacing.sm,
-    gap: 8,
-  },
-  bikeInfoRow: {
-    flexDirection: 'row',
-  },
-  bikeSeatNotice: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 6,
-    backgroundColor: '#fef3c7',
-    paddingHorizontal: 10,
-    paddingVertical: 4,
-    borderRadius: Radius.full,
-    borderWidth: 1,
-    borderColor: '#fde68a',
-  },
-  bikeSeatNoticeText: {
-    fontFamily: 'Inter-SemiBold',
-    fontSize: 11,
-    color: '#b45309',
-  },
-  helmetRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'space-between',
-    backgroundColor: '#f8fafc',
-    borderRadius: 10,
-    padding: 10,
-    borderWidth: 1,
-    borderColor: '#e2e8f0',
-  },
-  helmetTitle: {
-    fontFamily: 'Inter-SemiBold',
-    fontSize: 12,
-    color: Colors.neutral[800],
-  },
-  helmetSubtitle: {
-    fontFamily: 'Inter-Regular',
-    fontSize: 11,
-    color: Colors.neutral[500],
-  },
-  registeredVehicleNote: {
-    marginTop: Spacing.xs,
-    paddingTop: 8,
-    borderTopWidth: 1,
-    borderTopColor: '#f1f5f9',
-  },
-  registeredVehicleText: {
-    fontFamily: 'Inter-Medium',
-    fontSize: 11,
-    color: Colors.neutral[500],
   },
 
   // Schedule Grid
@@ -1300,12 +1542,213 @@ const styles = StyleSheet.create({
     fontFamily: 'Inter-Bold',
   },
 
-  // Smart Auto-Fare Card
+  // Vehicle Section
+  vehicleSegment: {
+    flexDirection: 'row',
+    backgroundColor: '#f1f5f9',
+    borderRadius: 12,
+    padding: 3,
+    gap: 4,
+    marginBottom: Spacing.xs,
+  },
+  vehicleTab: {
+    flex: 1,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 6,
+    paddingVertical: 9,
+    borderRadius: 9,
+  },
+  vehicleTabActive: {
+    backgroundColor: Colors.primary[600],
+    ...Shadow.sm,
+  },
+  vehicleTabText: {
+    fontFamily: 'Inter-Medium',
+    fontSize: 13,
+    color: Colors.neutral[600],
+  },
+  vehicleTabTextActive: {
+    fontFamily: 'Inter-SemiBold',
+    color: '#ffffff',
+  },
+  singleVehicleCard: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 12,
+    backgroundColor: '#f8fafc',
+    borderRadius: 12,
+    padding: 12,
+    borderWidth: 1,
+    borderColor: '#e2e8f0',
+    marginBottom: Spacing.xs,
+  },
+  singleVehicleIconWrap: {
+    width: 42,
+    height: 42,
+    borderRadius: 21,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  singleVehicleTitleRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    marginBottom: 2,
+  },
+  singleVehicleTitle: {
+    fontFamily: 'Inter-Bold',
+    fontSize: 14,
+    color: Colors.neutral[900],
+  },
+  singleVehicleModelText: {
+    fontFamily: 'Inter-Medium',
+    fontSize: 12,
+    color: Colors.neutral[600],
+  },
+  singleVehicleVerifiedPill: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 4,
+    backgroundColor: '#ecfdf5',
+    paddingHorizontal: 7,
+    paddingVertical: 2,
+    borderRadius: Radius.full,
+    borderWidth: 1,
+    borderColor: '#a7f3d0',
+  },
+  singleVehicleVerifiedText: {
+    fontFamily: 'Inter-SemiBold',
+    fontSize: 10,
+    color: '#15803d',
+  },
+  unverifiedVehicleCard: {
+    flexDirection: 'row',
+    alignItems: 'flex-start',
+    gap: 10,
+    backgroundColor: '#fffbeb',
+    padding: 12,
+    borderRadius: 12,
+    borderWidth: 1,
+    borderColor: '#fde68a',
+    marginBottom: Spacing.xs,
+  },
+  unverifiedVehicleTitle: {
+    fontFamily: 'Inter-Bold',
+    fontSize: 13,
+    color: '#92400e',
+    marginBottom: 2,
+  },
+  unverifiedVehicleSub: {
+    fontFamily: 'Inter-Regular',
+    fontSize: 11,
+    color: '#b45309',
+    lineHeight: 16,
+    marginBottom: 8,
+  },
+  addVehicleBtn: {
+    alignSelf: 'flex-start',
+    backgroundColor: '#d97706',
+    paddingHorizontal: 10,
+    paddingVertical: 5,
+    borderRadius: 6,
+  },
+  addVehicleBtnText: {
+    fontFamily: 'Inter-SemiBold',
+    fontSize: 11,
+    color: '#ffffff',
+  },
+
+  // Seats for Car
+  seatSection: {
+    marginTop: Spacing.sm,
+  },
+  inputLabel: {
+    fontFamily: 'Inter-SemiBold',
+    fontSize: 12,
+    color: Colors.neutral[700],
+    marginBottom: 6,
+  },
+  seatPillRow: {
+    flexDirection: 'row',
+    gap: 6,
+  },
+  seatPill: {
+    flex: 1,
+    paddingVertical: 8,
+    borderRadius: 10,
+    backgroundColor: '#f8fafc',
+    borderWidth: 1,
+    borderColor: '#e2e8f0',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  seatPillActive: {
+    backgroundColor: Colors.primary[600],
+    borderColor: Colors.primary[600],
+  },
+  seatPillText: {
+    fontFamily: 'Inter-SemiBold',
+    fontSize: 13,
+    color: Colors.neutral[700],
+  },
+  seatPillTextActive: {
+    color: '#ffffff',
+    fontFamily: 'Inter-Bold',
+  },
+
+  // Bike Section
+  bikeSection: {
+    marginTop: Spacing.sm,
+    gap: 8,
+  },
+  bikeInfoRow: {
+    flexDirection: 'row',
+  },
+  bikeSeatNotice: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+    backgroundColor: '#fef3c7',
+    paddingHorizontal: 10,
+    paddingVertical: 4,
+    borderRadius: Radius.full,
+    borderWidth: 1,
+    borderColor: '#fde68a',
+  },
+  bikeSeatNoticeText: {
+    fontFamily: 'Inter-SemiBold',
+    fontSize: 11,
+    color: '#b45309',
+  },
+  helmetRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    backgroundColor: '#f8fafc',
+    borderRadius: 10,
+    padding: 10,
+    borderWidth: 1,
+    borderColor: '#e2e8f0',
+  },
+  helmetTitle: {
+    fontFamily: 'Inter-SemiBold',
+    fontSize: 12,
+    color: Colors.neutral[800],
+  },
+  helmetSubtitle: {
+    fontFamily: 'Inter-Regular',
+    fontSize: 11,
+    color: Colors.neutral[500],
+  },
+
+  // Fare Card
   fareCard: {
     backgroundColor: '#f0fdf4',
-    borderRadius: 16,
+    borderRadius: 14,
     padding: Spacing.md,
-    marginBottom: Spacing.sm,
+    marginTop: Spacing.sm,
     borderWidth: 1,
     borderColor: '#bbf7d0',
     ...Shadow.sm,
@@ -1360,24 +1803,24 @@ const styles = StyleSheet.create({
     fontSize: 11,
     color: '#166534',
   },
-  farePendingCard: {
+  policyTag: {
     flexDirection: 'row',
     alignItems: 'center',
-    gap: 8,
-    backgroundColor: '#f8fafc',
-    borderRadius: 14,
-    padding: Spacing.md,
-    marginBottom: Spacing.sm,
+    gap: 6,
+    backgroundColor: '#f0f9ff',
+    paddingHorizontal: 10,
+    paddingVertical: 7,
+    borderRadius: 8,
+    marginTop: Spacing.sm,
     borderWidth: 1,
-    borderColor: '#e2e8f0',
-    borderStyle: 'dashed',
+    borderColor: '#bae6fd',
   },
-  farePendingText: {
+  policyTagText: {
     flex: 1,
-    fontFamily: 'Inter-Regular',
+    fontFamily: 'Inter-Medium',
     fontSize: 11,
-    color: Colors.neutral[500],
-    lineHeight: 16,
+    color: Colors.primary[800],
+    lineHeight: 15,
   },
 
   // Error Notice
@@ -1385,7 +1828,6 @@ const styles = StyleSheet.create({
     backgroundColor: '#fef2f2',
     borderRadius: 10,
     padding: 10,
-    marginBottom: Spacing.sm,
     borderWidth: 1,
     borderColor: '#fecaca',
   },
@@ -1405,7 +1847,6 @@ const styles = StyleSheet.create({
     backgroundColor: Colors.primary[600],
     borderRadius: 14,
     height: 52,
-    marginTop: 4,
     ...Shadow.md,
   },
   submitButtonLoading: {

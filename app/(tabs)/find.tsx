@@ -27,7 +27,8 @@ import {
   X,
   RefreshCw,
   Crosshair,
-  Sparkles,
+  Plus,
+  Send,
   ChevronRight,
   Navigation,
   MapPin,
@@ -927,7 +928,7 @@ export default function FindRideScreen() {
                           onPress={() => router.push('/passenger-post/create')}
                           activeOpacity={0.85}
                         >
-                          <Sparkles size={16} color="#ffffff" />
+                          <Plus size={16} color="#ffffff" strokeWidth={2.4} />
                           <Text style={styles.postDropButtonText}>+ Need a Drop? Post Request</Text>
                         </TouchableOpacity>
                       </View>
@@ -1021,7 +1022,7 @@ export default function FindRideScreen() {
               activeOpacity={0.85}
             >
               <View style={styles.postRequestIcon}>
-                <Sparkles size={18} color="#ffffff" />
+                <Send size={18} color="#ffffff" strokeWidth={2.2} />
               </View>
               <View style={{ flex: 1 }}>
                 <Text style={styles.postRequestTitle}>Need a Drop? Post Your Route</Text>
@@ -1049,7 +1050,7 @@ export default function FindRideScreen() {
                   onPress={() => router.push('/passenger-post/create')}
                   activeOpacity={0.85}
                 >
-                  <Sparkles size={16} color="#ffffff" />
+                  <Plus size={16} color="#ffffff" strokeWidth={2.4} />
                   <Text style={styles.postDropButtonText}>Post First Drop Request</Text>
                 </TouchableOpacity>
               </View>

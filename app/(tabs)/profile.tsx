@@ -7,7 +7,7 @@ import { router, useFocusEffect } from 'expo-router';
 import {
   User as UserIcon, Phone, Star, Car, LogOut, Edit3, Check, X,
   Shield, FileCheck, MapPin, Camera, Upload, Bike, HeartHandshake,
-  FileText, Sparkles, Clock, ChevronRight, ChevronDown, PlusCircle,
+  FileText, Clock, ChevronRight, ChevronDown, PlusCircle,
   ArrowUpRight, ShieldCheck, AlertCircle, Navigation, CheckCircle2,
 } from 'lucide-react-native';
 import { api } from '@/lib/api';

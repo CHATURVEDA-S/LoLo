@@ -28,7 +28,6 @@ import {
   AlertCircle,
   Share2,
   Calendar,
-  Sparkles,
   CheckCircle2,
 } from 'lucide-react-native';
 import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context';
@@ -688,7 +687,7 @@ export default function PassengerPostDetailScreen() {
                 <ActivityIndicator size="small" color="#ffffff" />
               ) : (
                 <>
-                  <Sparkles size={18} color="#ffffff" strokeWidth={2.4} />
+                  <Car size={18} color="#ffffff" strokeWidth={2.4} />
                   <Text style={styles.actionBtnOfferSingleText}>
                     Offer Drop • ₹{Math.round(post.suggested_fare)}
                   </Text>
