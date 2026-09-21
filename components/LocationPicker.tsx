@@ -63,7 +63,7 @@ interface MetroPlace {
 }
 
 // Curated database of metro places, stations, and tech corridors in Indian cities
-const METRO_PLACES: Record<string, MetroPlace[]> = {
+export const METRO_PLACES: Record<string, MetroPlace[]> = {
   Hyderabad: [
     { name: 'HITEC City Cyber Towers', address: 'Madhapur, HITEC City, Hyderabad', lat: 17.4504, lng: 78.3808, category: 'Tech Park' },
     { name: 'HITEC City Metro Station', address: 'Blue Line, HITEC City, Hyderabad', lat: 17.4486, lng: 78.3842, category: 'Metro Station' },
@@ -271,104 +271,76 @@ export default function LocationPicker({
         setIsSearchingOnline(true);
         const parsedResults: LocationResult[] = [];
 
-        // 1. Primary: Photon API with city coordinates bias
+        // 1. Primary: Nominatim with User-Agent & Indian address formatting
         try {
-          const photonUrl = `https://photon.komoot.io/api/?q=${encodeURIComponent(trimmed)}&lat=${initialLat}&lon=${initialLng}&limit=12`;
-          const res = await fetch(photonUrl, { signal: controller.signal });
-          if (res.ok) {
-            const data = await res.json();
-            if (data && Array.isArray(data.features) && data.features.length > 0) {
-              data.features.forEach((f: any, idx: number) => {
-                const p = f.properties || {};
-                const coords = f.geometry?.coordinates;
-                if (!coords || coords.length < 2) return;
-                const lng = coords[0];
-                const lat = coords[1];
+          const nomQuery = trimmed.toLowerCase().includes(activeCity.toLowerCase())
+            ? trimmed
+            : `${trimmed}, ${activeCity}`;
+          const nomUrl = `https://nominatim.openstreetmap.org/search?q=${encodeURIComponent(nomQuery)}&format=json&addressdetails=1&limit=10&countrycodes=in`;
+          const nomRes = await fetch(nomUrl, {
+            signal: controller.signal,
+            headers: { 'User-Agent': 'LoRideApp/1.0' },
+          });
+          if (nomRes.ok) {
+            const nomData = await nomRes.json();
+            if (Array.isArray(nomData) && nomData.length > 0) {
+              nomData.forEach((item: any, idx: number) => {
+                const lat = parseFloat(item.lat);
+                const lng = parseFloat(item.lon);
+                if (isNaN(lat) || isNaN(lng)) return;
 
-                const rawName = p.name || p.street || p.locality || p.district || trimmed;
-                const locality = p.locality || p.district;
-                const cityPart = p.city || p.county || activeCity;
+                const rawName = item.name || item.display_name?.split(',')[0] || trimmed;
+                const addr = item.address || {};
+                const locality = addr.suburb || addr.neighbourhood || addr.city_district;
 
                 let displayName = rawName;
                 if (locality && !displayName.toLowerCase().includes(locality.toLowerCase())) {
-                  if (displayName.length < 22 || p.osm_key === 'highway') {
-                    displayName = `${displayName}, ${locality}`;
-                  }
+                  displayName = `${displayName}, ${locality}`;
                 }
-
-                const addressParts: string[] = [
-                  p.street,
-                  locality,
-                  cityPart,
-                  p.state,
-                  p.postcode ? `${p.postcode}` : undefined,
-                ].filter(Boolean).filter((part, i, arr) => !displayName.toLowerCase().includes(part!.toLowerCase()) && arr.indexOf(part) === i) as string[];
-
-                const fullAddress = addressParts.length > 0
-                  ? addressParts.join(', ')
-                  : [locality, cityPart, p.state].filter(Boolean).join(', ') || `${activeCity}, India`;
 
                 parsedResults.push({
                   name: displayName,
-                  address: fullAddress,
+                  address: item.display_name || `${activeCity}, India`,
                   lat,
                   lng,
-                  placeId: `photon_${p.osm_id || idx}`,
-                  category: formatOsmCategory(p.osm_value, p.type) as any,
+                  placeId: `nom_${item.place_id || idx}`,
+                  category: formatOsmCategory(item.type, item.class) as any,
                 });
               });
             }
           }
-        } catch (photonErr: any) {
-          if (photonErr.name === 'AbortError') return;
+        } catch (nomErr: any) {
+          if (nomErr.name === 'AbortError') return;
         }
 
-        // 2. Secondary: Nominatim if Photon gave few results
+        // 2. Secondary: Native expo-location geocodeAsync if needed
         if (parsedResults.length < 3 && !controller.signal.aborted) {
           try {
-            const nomQuery = trimmed.toLowerCase().includes(activeCity.toLowerCase())
-              ? trimmed
-              : `${trimmed}, ${activeCity}`;
-            const nomUrl = `https://nominatim.openstreetmap.org/search?q=${encodeURIComponent(nomQuery)}&format=json&addressdetails=1&limit=6&countrycodes=in`;
-            const nomRes = await fetch(nomUrl, {
-              signal: controller.signal,
-              headers: { 'User-Agent': 'LoRideApp/1.0' },
-            });
-            if (nomRes.ok) {
-              const nomData = await nomRes.json();
-              if (Array.isArray(nomData)) {
-                nomData.forEach((item: any, idx: number) => {
-                  const lat = parseFloat(item.lat);
-                  const lng = parseFloat(item.lon);
-                  if (isNaN(lat) || isNaN(lng)) return;
-
-                  // Skip if already in results (within 0.001 deg)
-                  const exists = parsedResults.some((r) => Math.abs(r.lat - lat) < 0.001 && Math.abs(r.lng - lng) < 0.001);
-                  if (exists) return;
-
-                  const rawName = item.name || item.display_name?.split(',')[0] || trimmed;
-                  const addr = item.address || {};
-                  const locality = addr.suburb || addr.neighbourhood || addr.city_district;
-
-                  let displayName = rawName;
-                  if (locality && !displayName.toLowerCase().includes(locality.toLowerCase())) {
-                    displayName = `${displayName}, ${locality}`;
-                  }
-
+            const geocoded = await Location.geocodeAsync(`${trimmed}, ${activeCity}`);
+            if (geocoded && geocoded.length > 0) {
+              for (const item of geocoded.slice(0, 3)) {
+                const exists = parsedResults.some((r) => Math.abs(r.lat - item.latitude) < 0.002 && Math.abs(r.lng - item.longitude) < 0.002);
+                if (!exists) {
+                  let placeTitle = trimmed;
+                  try {
+                    const rev = await Location.reverseGeocodeAsync({ latitude: item.latitude, longitude: item.longitude });
+                    if (rev && rev[0]) {
+                      const r = rev[0];
+                      placeTitle = [r.name || r.street, r.subregion || r.district || r.city].filter(Boolean).join(', ') || trimmed;
+                    }
+                  } catch {}
                   parsedResults.push({
-                    name: displayName,
-                    address: item.display_name || `${activeCity}, India`,
-                    lat,
-                    lng,
-                    placeId: `nom_${item.place_id || idx}`,
-                    category: formatOsmCategory(item.type, item.class) as any,
+                    name: placeTitle,
+                    address: `${trimmed}, ${activeCity}, India`,
+                    lat: item.latitude,
+                    lng: item.longitude,
+                    placeId: `expo_${item.latitude}_${item.longitude}`,
+                    category: 'Colony / Area' as any,
                   });
-                });
+                }
               }
             }
-          } catch (nomErr: any) {
-            if (nomErr.name === 'AbortError') return;
-          }
+          } catch {}
         }
 
         // 3. Fallback: Native expo-location geocodeAsync if still empty
@@ -675,7 +647,20 @@ export default function LocationPicker({
             {value || `Enter ${label.toLowerCase()}...`}
           </Text>
         </View>
-        <ChevronRight size={18} color={Colors.neutral[400]} strokeWidth={2} />
+        {value ? (
+          <TouchableOpacity
+            style={styles.triggerClearBtn}
+            onPress={(e) => {
+              e.stopPropagation();
+              onSelect({ name: '', address: '', lat: 0, lng: 0 });
+            }}
+            hitSlop={{ top: 12, bottom: 12, left: 12, right: 12 }}
+          >
+            <X size={18} color={Colors.neutral[400]} strokeWidth={2.4} />
+          </TouchableOpacity>
+        ) : (
+          <ChevronRight size={18} color={Colors.neutral[400]} strokeWidth={2} />
+        )}
       </TouchableOpacity>
 
       {/* Uber Style Location Selection Modal */}
@@ -1039,6 +1024,11 @@ const styles = StyleSheet.create({
   pickerPlaceholder: {
     color: Colors.neutral[400],
     fontFamily: 'Inter-Regular',
+  },
+  triggerClearBtn: {
+    padding: 6,
+    borderRadius: 14,
+    backgroundColor: '#f1f5f9',
   },
 
   // Modal Container

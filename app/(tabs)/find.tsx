@@ -38,7 +38,7 @@ import { Colors, Spacing, Radius, FontSizes, Shadow } from '@/lib/theme';
 import type { Ride, VehicleType, PassengerPost, DriverVerification } from '@/lib/types';
 import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context';
 import RoutePreviewMap from '@/components/RoutePreviewMap';
-import LocationPicker, { type LocationResult } from '@/components/LocationPicker';
+import LocationPicker, { type LocationResult, METRO_PLACES } from '@/components/LocationPicker';
 import { calculateFare, calculateDistanceKm } from '@/lib/fare-calculator';
 
 export default function FindRideScreen() {
@@ -77,9 +77,14 @@ export default function FindRideScreen() {
   const [destCoords, setDestCoords] = useState<{ lat: number; lng: number } | null>(null);
   const [detectingGps, setDetectingGps] = useState(false);
 
-  // LocationPicker modal toggles
-  const [showOriginPicker, setShowOriginPicker] = useState(false);
-  const [showDestPicker, setShowDestPicker] = useState(false);
+  // Address search autocomplete state
+  const [activeInput, setActiveInput] = useState<'origin' | 'dest' | null>(null);
+  const [suggestions, setSuggestions] = useState<
+    Array<{ name: string; address: string; lat: number; lng: number }>
+  >([]);
+  const [searchingAddress, setSearchingAddress] = useState(false);
+  const searchTimerRef = useRef<any>(null);
+  const searchAbortRef = useRef<AbortController | null>(null);
 
   // Vehicle Selection: 'car' or 'bike'
   const [selectedVehicle, setSelectedVehicle] = useState<'car' | 'bike'>('car');
@@ -162,7 +167,123 @@ export default function FindRideScreen() {
     }
   }
 
-  // Geocode destination when typed
+  // Fast address search with instant local metro places + debounced Nominatim
+  function handleSearchAddress(query: string, target: 'origin' | 'dest') {
+    const trimmed = query.trim();
+    if (!trimmed || trimmed.length < 2) {
+      setSuggestions([]);
+      setSearchingAddress(false);
+      return;
+    }
+
+    setActiveInput(target);
+    const activeCity = user?.city || 'Hyderabad';
+    const cityPlaces = (METRO_PLACES as any)[activeCity] || (METRO_PLACES as any)['Hyderabad'] || [];
+
+    // 1. Instant local matching (0ms)
+    const localMatches = cityPlaces
+      .filter((p: any) => {
+        const q = trimmed.toLowerCase();
+        return p.name.toLowerCase().includes(q) || p.address.toLowerCase().includes(q);
+      })
+      .map((p: any) => ({
+        name: p.name,
+        address: p.address,
+        lat: p.lat,
+        lng: p.lng,
+      }));
+
+    setSuggestions(localMatches);
+
+    // 2. Debounced online Nominatim & geocoding (200ms)
+    if (searchTimerRef.current) clearTimeout(searchTimerRef.current);
+    if (searchAbortRef.current) searchAbortRef.current.abort();
+
+    const controller = new AbortController();
+    searchAbortRef.current = controller;
+
+    searchTimerRef.current = setTimeout(async () => {
+      setSearchingAddress(true);
+      try {
+        const nomQuery = trimmed.toLowerCase().includes(activeCity.toLowerCase())
+          ? trimmed
+          : `${trimmed}, ${activeCity}`;
+        const res = await fetch(
+          `https://nominatim.openstreetmap.org/search?q=${encodeURIComponent(nomQuery)}&format=json&addressdetails=1&limit=8&countrycodes=in`,
+          {
+            signal: controller.signal,
+            headers: { 'User-Agent': 'LoRideApp/1.0' },
+          }
+        );
+        if (res.ok) {
+          const data = await res.json();
+          if (Array.isArray(data) && data.length > 0) {
+            const onlineList: Array<{ name: string; address: string; lat: number; lng: number }> = [];
+            data.forEach((item: any) => {
+              const lat = parseFloat(item.lat);
+              const lng = parseFloat(item.lon);
+              if (isNaN(lat) || isNaN(lng)) return;
+              const rawName = item.name || item.display_name?.split(',')[0] || trimmed;
+              const addr = item.address || {};
+              const locality = addr.suburb || addr.neighbourhood || addr.city_district;
+              const displayName = locality && !rawName.toLowerCase().includes(locality.toLowerCase())
+                ? `${rawName}, ${locality}`
+                : rawName;
+
+              onlineList.push({
+                name: displayName,
+                address: item.display_name || `${activeCity}, India`,
+                lat,
+                lng,
+              });
+            });
+
+            // Combine without duplicate coordinates
+            const combined = [...localMatches];
+            onlineList.forEach((item) => {
+              const exists = combined.some(
+                (c) => Math.abs(c.lat - item.lat) < 0.002 && Math.abs(c.lng - item.lng) < 0.002
+              );
+              if (!exists) combined.push(item);
+            });
+            setSuggestions(combined);
+          }
+        }
+      } catch (err: any) {
+        if (err.name === 'AbortError') return;
+      } finally {
+        setSearchingAddress(false);
+      }
+    }, 200);
+  }
+
+  function handleSelectSuggestion(item: { name: string; address: string; lat: number; lng: number }) {
+    if (activeInput === 'origin') {
+      setOrigin(item.name);
+      setOriginCoords({ lat: item.lat, lng: item.lng });
+    } else {
+      setDestination(item.name);
+      setDestCoords({ lat: item.lat, lng: item.lng });
+    }
+    setSuggestions([]);
+    setActiveInput(null);
+  }
+
+  function handleClearOrigin() {
+    setOrigin('');
+    setOriginCoords(null);
+    setSuggestions([]);
+    if (activeInput === 'origin') setActiveInput(null);
+  }
+
+  function handleClearDest() {
+    setDestination('');
+    setDestCoords(null);
+    setSuggestions([]);
+    if (activeInput === 'dest') setActiveInput(null);
+  }
+
+  // Geocode destination when typed and blurred
   async function resolveDestinationCoords(text: string) {
     if (!text.trim()) {
       setDestCoords(null);
@@ -400,6 +521,11 @@ export default function FindRideScreen() {
               onChangeText={(text) => {
                 setOrigin(text);
                 if (!text.trim()) setOriginCoords(null);
+                handleSearchAddress(text, 'origin');
+              }}
+              onFocus={() => {
+                setActiveInput('origin');
+                if (origin.trim().length >= 2) handleSearchAddress(origin, 'origin');
               }}
               onBlur={() => {
                 if (origin.trim() && !originCoords) {
@@ -409,6 +535,15 @@ export default function FindRideScreen() {
                 }
               }}
             />
+            {origin.length > 0 && (
+              <TouchableOpacity
+                style={styles.clearBtn}
+                onPress={handleClearOrigin}
+                hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
+              >
+                <X size={15} color="#94a3b8" />
+              </TouchableOpacity>
+            )}
             <TouchableOpacity
               style={styles.gpsBtn}
               onPress={() => useCurrentLocationForOrigin(true)}
@@ -436,23 +571,73 @@ export default function FindRideScreen() {
               value={destination}
               onChangeText={(text) => {
                 setDestination(text);
-                resolveDestinationCoords(text);
+                if (!text.trim()) setDestCoords(null);
+                handleSearchAddress(text, 'dest');
+              }}
+              onFocus={() => {
+                setActiveInput('dest');
+                if (destination.trim().length >= 2) handleSearchAddress(destination, 'dest');
               }}
               onBlur={() => resolveDestinationCoords(destination)}
             />
             {destination.length > 0 && (
               <TouchableOpacity
                 style={styles.clearBtn}
-                onPress={() => {
-                  setDestination('');
-                  setDestCoords(null);
-                }}
+                onPress={handleClearDest}
+                hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
               >
                 <X size={15} color="#94a3b8" />
               </TouchableOpacity>
             )}
           </View>
         </View>
+
+        {/* Live Address Suggestions Dropdown */}
+        {suggestions.length > 0 && activeInput && (
+          <View style={styles.suggestionsCard}>
+            <View style={styles.suggestionsHeaderRow}>
+              <Text style={styles.suggestionsHeaderTitle}>
+                {searchingAddress ? 'Searching Addresses...' : 'Select Address'}
+              </Text>
+              <TouchableOpacity
+                onPress={() => {
+                  setSuggestions([]);
+                  setActiveInput(null);
+                }}
+                hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
+              >
+                <X size={14} color="#64748b" />
+              </TouchableOpacity>
+            </View>
+            <ScrollView
+              style={styles.suggestionsList}
+              keyboardShouldPersistTaps="handled"
+              nestedScrollEnabled
+            >
+              {suggestions.map((item, idx) => (
+                <TouchableOpacity
+                  key={`${item.name}-${idx}`}
+                  style={styles.suggestionItem}
+                  onPress={() => handleSelectSuggestion(item)}
+                  activeOpacity={0.75}
+                >
+                  <View style={styles.suggestionPinCircle}>
+                    <MapPin size={15} color="#0284c7" strokeWidth={2.2} />
+                  </View>
+                  <View style={styles.suggestionTextWrap}>
+                    <Text style={styles.suggestionTitle} numberOfLines={1}>
+                      {item.name}
+                    </Text>
+                    <Text style={styles.suggestionSub} numberOfLines={1}>
+                      {item.address}
+                    </Text>
+                  </View>
+                  <ChevronRight size={14} color="#94a3b8" />
+                </TouchableOpacity>
+              ))}
+            </ScrollView>
+          </View>
+        )}
       </View>
 
       <ScrollView
@@ -1292,5 +1477,65 @@ const styles = StyleSheet.create({
     fontSize: 12,
     fontWeight: '700',
     color: '#ffffff',
+  },
+  suggestionsCard: {
+    marginTop: 8,
+    backgroundColor: '#ffffff',
+    borderRadius: 14,
+    borderWidth: 1,
+    borderColor: '#e2e8f0',
+    maxHeight: 220,
+    ...Shadow.md,
+  },
+  suggestionsHeaderRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    paddingHorizontal: 12,
+    paddingVertical: 8,
+    borderBottomWidth: 1,
+    borderBottomColor: '#f1f5f9',
+    backgroundColor: '#f8fafc',
+    borderTopLeftRadius: 14,
+    borderTopRightRadius: 14,
+  },
+  suggestionsHeaderTitle: {
+    fontSize: 11,
+    fontWeight: '700',
+    color: '#0284c7',
+    textTransform: 'uppercase',
+  },
+  suggestionsList: {
+    maxHeight: 180,
+  },
+  suggestionItem: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    paddingHorizontal: 12,
+    paddingVertical: 10,
+    borderBottomWidth: 1,
+    borderBottomColor: '#f8fafc',
+    gap: 10,
+  },
+  suggestionPinCircle: {
+    width: 28,
+    height: 28,
+    borderRadius: 14,
+    backgroundColor: '#e0f2fe',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  suggestionTextWrap: {
+    flex: 1,
+  },
+  suggestionTitle: {
+    fontSize: 13,
+    fontWeight: '700',
+    color: '#0f172a',
+    marginBottom: 2,
+  },
+  suggestionSub: {
+    fontSize: 11,
+    color: '#64748b',
   },
 });
