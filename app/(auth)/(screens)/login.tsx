@@ -456,17 +456,26 @@ export default function LoginScreen() {
       >
         <View style={styles.modalOverlay}>
           <KeyboardAvoidingView
-            behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
-            style={styles.modalCardWrapper}
+            behavior={Platform.OS === 'ios' ? 'padding' : undefined}
+            style={styles.modalKeyboardAvoiding}
           >
-            <View style={styles.floatingCard}>
-              {step === 'otp' ? (
-                <>
-                  {/* Verified Avatar Header */}
-                  <VerifiedUserAvatar size={76} />
+            <ScrollView
+              contentContainerStyle={[
+                styles.modalScrollContent,
+                isKeyboardVisible && styles.modalScrollContentKeyboard,
+              ]}
+              keyboardShouldPersistTaps="handled"
+              showsVerticalScrollIndicator={false}
+              bounces={false}
+            >
+              <View style={[styles.floatingCard, isKeyboardVisible && styles.floatingCardKeyboard]}>
+                {step === 'otp' ? (
+                  <>
+                    {/* Verified Avatar Header */}
+                    <VerifiedUserAvatar size={isKeyboardVisible ? 60 : 76} />
 
-                  {/* Title & Subtitle */}
-                  <Text style={styles.cardHeaderTitle}>Verify your account</Text>
+                    {/* Title & Subtitle */}
+                    <Text style={styles.cardHeaderTitle}>Verify your account</Text>
                   <Text style={styles.cardHeaderSubtitle}>
                     Enter 6 digits verification code we{'\n'}have sent to{' '}
                     <Text style={styles.highlightPhone}>+91 {cleanDigits}</Text>
@@ -594,8 +603,13 @@ export default function LoginScreen() {
               ) : (
                 /* NEW USER QUICK PROFILE FINISH */
                 <>
-                  <View style={styles.welcomeEmojiWrapper}>
-                    <Text style={{ fontSize: 36 }}>🎉</Text>
+                  <View
+                    style={[
+                      styles.welcomeEmojiWrapper,
+                      isKeyboardVisible && { marginBottom: 6, height: 48, width: 48 },
+                    ]}
+                  >
+                    <Text style={{ fontSize: isKeyboardVisible ? 26 : 36 }}>🎉</Text>
                   </View>
 
                   <Text style={styles.cardHeaderTitle}>Welcome to Lo Ride!</Text>
@@ -680,7 +694,8 @@ export default function LoginScreen() {
                   </TouchableOpacity>
                 </>
               )}
-            </View>
+              </View>
+            </ScrollView>
           </KeyboardAvoidingView>
         </View>
       </Modal>
@@ -884,15 +899,26 @@ const styles = StyleSheet.create({
   modalOverlay: {
     flex: 1,
     backgroundColor: 'rgba(35, 35, 35, 0.72)', // dark dimmed backdrop from reference
+  },
+  modalKeyboardAvoiding: {
+    flex: 1,
+    width: '100%',
+  },
+  modalScrollContent: {
+    flexGrow: 1,
     justifyContent: 'center',
     alignItems: 'center',
-    paddingHorizontal: 22,
+    paddingHorizontal: 20,
+    paddingVertical: 24,
   },
-  modalCardWrapper: {
-    width: '100%',
-    maxWidth: 370,
+  modalScrollContentKeyboard: {
+    justifyContent: 'center',
+    paddingTop: Platform.OS === 'android' ? 24 : 12,
+    paddingBottom: Platform.OS === 'android' ? 24 : 12,
   },
   floatingCard: {
+    width: '100%',
+    maxWidth: 370,
     backgroundColor: '#ffffff',
     borderRadius: 26,
     paddingHorizontal: 22,
@@ -904,6 +930,11 @@ const styles = StyleSheet.create({
     shadowOpacity: 0.22,
     shadowRadius: 30,
     elevation: 14,
+  },
+  floatingCardKeyboard: {
+    paddingTop: 18,
+    paddingBottom: 16,
+    borderRadius: 22,
   },
   cardHeaderTitle: {
     fontFamily: 'Inter-Bold',

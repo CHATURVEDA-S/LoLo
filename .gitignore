@@ -14,6 +14,9 @@ expo-env.d.ts
 *.p12
 *.key
 *.mobileprovision
+credentials.json
+*.aab
+*.apk
 
 # metro
 .metro-health-check*
