@@ -35,6 +35,11 @@ export default function RoutePreviewMap({
   const webViewRef = useRef<WebView>(null);
 
   // Default fallback center (Hyderabad HITEC City / Jubilee Hills area)
+  const GOOGLE_MAPS_KEY =
+  process.env.EXPO_PUBLIC_GOOGLE_MAPS_KEY ||
+  process.env.EXPO_PUBLIC_GOOGLE_MAPS_API_KEY ||
+  'AIzaSyAv6puZhhuJOdVzyYWhPf7d7M_MwRjjt80';
+
   const centerLat = originLat || 17.4435;
   const centerLng = originLng || 78.3772;
 

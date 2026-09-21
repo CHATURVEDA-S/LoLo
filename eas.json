@@ -14,7 +14,7 @@
         "EXPO_PUBLIC_API_URL": "https://lolo-ff1e.onrender.com/api",
         "EXPO_PUBLIC_SUPABASE_URL": "https://ttybzghytqyyopbvtcbi.supabase.co",
         "EXPO_PUBLIC_SUPABASE_ANON_KEY": "sb_publishable_v48GVM3DnMe9vbzq_rZBJA_DZSWuHSC",
-        "EXPO_PUBLIC_GOOGLE_MAPS_API_KEY": "AIzaSyAg8BiwWrJEYduu94ilNNebUdBFOD3B9uQ"
+        "EXPO_PUBLIC_GOOGLE_MAPS_API_KEY": "AIzaSyAv6puZhhuJOdVzyYWhPf7d7M_MwRjjt80"
       },
       "android": {
         "buildType": "apk"
@@ -26,7 +26,7 @@
         "EXPO_PUBLIC_API_URL": "https://lolo-ff1e.onrender.com/api",
         "EXPO_PUBLIC_SUPABASE_URL": "https://ttybzghytqyyopbvtcbi.supabase.co",
         "EXPO_PUBLIC_SUPABASE_ANON_KEY": "sb_publishable_v48GVM3DnMe9vbzq_rZBJA_DZSWuHSC",
-        "EXPO_PUBLIC_GOOGLE_MAPS_API_KEY": "AIzaSyAg8BiwWrJEYduu94ilNNebUdBFOD3B9uQ"
+        "EXPO_PUBLIC_GOOGLE_MAPS_API_KEY": "AIzaSyAv6puZhhuJOdVzyYWhPf7d7M_MwRjjt80"
       },
       "android": {
         "buildType": "app-bundle"
