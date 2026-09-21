@@ -1016,12 +1016,12 @@ const styles = StyleSheet.create({
   },
   vehicleSubtitle: {
     fontSize: 12,
-    color: '#e11d48', // Soft reddish/coral matching screenshot
-    fontWeight: '500',
+    color: '#0284c7', // Lo Ride brand sky blue
+    fontWeight: '600',
   },
   noMatchesText: {
     fontSize: 12,
-    color: '#dc2626',
+    color: '#94a3b8',
     fontWeight: '500',
   },
   vehiclePriceWrap: {
@@ -1041,11 +1041,11 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'center',
-    backgroundColor: '#dc2626', // Red CTA matching reference screenshot
-    borderRadius: 10,
-    height: 50,
+    backgroundColor: '#0284c7', // Lo Ride Signature Sky Blue
+    borderRadius: 12,
+    height: 52,
     gap: 8,
-    ...Shadow.sm,
+    ...Shadow.md,
   },
   primaryCtaButtonText: {
     fontSize: 15,
@@ -1054,14 +1054,14 @@ const styles = StyleSheet.create({
   },
   ctaMatchBadge: {
     backgroundColor: '#ffffff',
-    paddingHorizontal: 7,
-    paddingVertical: 2,
+    paddingHorizontal: 8,
+    paddingVertical: 3,
     borderRadius: 10,
   },
   ctaMatchBadgeText: {
     fontSize: 12,
     fontWeight: '800',
-    color: '#dc2626',
+    color: '#0284c7',
   },
   matchesSection: {
     paddingHorizontal: 16,

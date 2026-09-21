@@ -381,7 +381,7 @@ const styles = StyleSheet.create({
     ...Shadow.sm,
   },
   plusBtn: {
-    backgroundColor: '#ef4444', // Red + button matching reference screenshot
-    borderColor: '#dc2626',
+    backgroundColor: '#0284c7', // Lo Ride Brand Sky Blue
+    borderColor: '#0369a1',
   },
 });
