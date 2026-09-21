@@ -6,7 +6,7 @@ import {
   Share,
 } from 'react-native';
 import { WebView } from 'react-native-webview';
-import { Share2, Plus, Crosshair } from 'lucide-react-native';
+import { Share2, Plus, Minus, Crosshair } from 'lucide-react-native';
 import { Shadow } from '@/lib/theme';
 
 interface RoutePreviewMapProps {
@@ -252,6 +252,7 @@ export default function RoutePreviewMap({
               lineCap: 'round'
             }).addTo(map);
 
+            window.activePolyline = activePolyline;
             map.fitBounds(activePolyline.getBounds(), {
               padding: [45, 45],
               maxZoom: 15
@@ -276,6 +277,7 @@ export default function RoutePreviewMap({
           lineJoin: 'round'
         }).addTo(map);
 
+        window.activePolyline = fallbackLine;
         map.fitBounds(fallbackLine.getBounds(), {
           padding: [50, 50],
           maxZoom: 15
@@ -289,12 +291,38 @@ export default function RoutePreviewMap({
     `
     }
 
+    // Zoom in control
+    window.zoomIn = function() {
+      try {
+        map.zoomIn();
+      } catch (e) {
+        console.error('zoomIn err', e);
+      }
+    };
+
+    // Zoom out control
+    window.zoomOut = function() {
+      try {
+        map.zoomOut();
+      } catch (e) {
+        console.error('zoomOut err', e);
+      }
+    };
+
     // Function to re-fit route bounds
     window.fitRouteBounds = function() {
-      if (boundsMarkers.length > 1) {
-        map.fitBounds(boundsMarkers, { padding: [45, 45] });
-      } else if (boundsMarkers.length === 1) {
-        map.setView(boundsMarkers[0], 14);
+      try {
+        if (window.activePolyline && typeof window.activePolyline.getBounds === 'function') {
+          map.fitBounds(window.activePolyline.getBounds(), { padding: [45, 45], maxZoom: 15 });
+        } else if (boundsMarkers && boundsMarkers.length > 1) {
+          map.fitBounds(L.latLngBounds(boundsMarkers), { padding: [45, 45], maxZoom: 15 });
+        } else if (boundsMarkers && boundsMarkers.length === 1) {
+          map.setView(boundsMarkers[0], 14);
+        } else {
+          map.setView([${centerLat}, ${centerLng}], 13);
+        }
+      } catch (e) {
+        console.error('fitRouteBounds err', e);
       }
     };
   </script>
@@ -302,8 +330,20 @@ export default function RoutePreviewMap({
 </html>
   `;
 
+  function handleZoomIn() {
+    webViewRef.current?.injectJavaScript(`if (window.zoomIn) { window.zoomIn(); } true;`);
+  }
+
+  function handleZoomOut() {
+    webViewRef.current?.injectJavaScript(`if (window.zoomOut) { window.zoomOut(); } true;`);
+  }
+
+  function handleRecenter() {
+    webViewRef.current?.injectJavaScript(`if (window.fitRouteBounds) { window.fitRouteBounds(); } true;`);
+  }
+
   return (
-    <View style={[styles.container, { height }]}>
+    <View style={[styles.container, { height }]} pointerEvents="box-none">
       <WebView
         ref={webViewRef}
         originWhitelist={['*']}
@@ -317,37 +357,46 @@ export default function RoutePreviewMap({
       />
 
       {/* Floating Action Buttons */}
-      <View style={styles.floatingControls}>
+      <View style={styles.floatingControls} pointerEvents="box-none">
         {/* Recenter Button */}
         <TouchableOpacity
           style={styles.iconBtn}
-          onPress={() => {
-            webViewRef.current?.injectJavaScript(`window.fitRouteBounds && window.fitRouteBounds(); true;`);
-          }}
-          activeOpacity={0.8}
+          onPress={handleRecenter}
+          activeOpacity={0.75}
+          hitSlop={{ top: 6, bottom: 6, left: 6, right: 6 }}
         >
           <Crosshair size={18} color="#0284c7" strokeWidth={2.4} />
+        </TouchableOpacity>
+
+        {/* Zoom In Button */}
+        <TouchableOpacity
+          style={styles.iconBtn}
+          onPress={handleZoomIn}
+          activeOpacity={0.75}
+          hitSlop={{ top: 6, bottom: 6, left: 6, right: 6 }}
+        >
+          <Plus size={18} color="#0f172a" strokeWidth={2.4} />
+        </TouchableOpacity>
+
+        {/* Zoom Out Button */}
+        <TouchableOpacity
+          style={styles.iconBtn}
+          onPress={handleZoomOut}
+          activeOpacity={0.75}
+          hitSlop={{ top: 6, bottom: 6, left: 6, right: 6 }}
+        >
+          <Minus size={18} color="#0f172a" strokeWidth={2.4} />
         </TouchableOpacity>
 
         {/* Share Route Button */}
         <TouchableOpacity
           style={styles.iconBtn}
           onPress={handleShare}
-          activeOpacity={0.8}
+          activeOpacity={0.75}
+          hitSlop={{ top: 6, bottom: 6, left: 6, right: 6 }}
         >
           <Share2 size={18} color="#0284c7" strokeWidth={2.4} />
         </TouchableOpacity>
-
-        {/* Quick Add / Post Request Button */}
-        {onPlusPress && (
-          <TouchableOpacity
-            style={[styles.iconBtn, styles.plusBtn]}
-            onPress={onPlusPress}
-            activeOpacity={0.8}
-          >
-            <Plus size={20} color="#ffffff" strokeWidth={2.6} />
-          </TouchableOpacity>
-        )}
       </View>
     </View>
   );
@@ -372,7 +421,8 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     alignItems: 'center',
     gap: 8,
-    zIndex: 20,
+    zIndex: 9999,
+    elevation: 25,
   },
   iconBtn: {
     width: 38,
@@ -383,7 +433,9 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
     borderWidth: 1,
     borderColor: '#e2e8f0',
+    zIndex: 10000,
     ...Shadow.sm,
+    elevation: 26,
   },
   plusBtn: {
     backgroundColor: '#0284c7', // Lo Ride Brand Sky Blue
