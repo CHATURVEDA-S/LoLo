@@ -21,11 +21,6 @@ interface RoutePreviewMapProps {
   onSharePress?: () => void;
 }
 
-const GOOGLE_MAPS_KEY =
-  process.env.EXPO_PUBLIC_GOOGLE_MAPS_KEY ||
-  process.env.EXPO_PUBLIC_GOOGLE_MAPS_API_KEY ||
-  'AIzaSyAg8BiwWrJEYduu94ilNNebUdBFOD3B9uQ';
-
 export default function RoutePreviewMap({
   originLat,
   originLng,
@@ -39,7 +34,7 @@ export default function RoutePreviewMap({
 }: RoutePreviewMapProps) {
   const webViewRef = useRef<WebView>(null);
 
-  // Default center (e.g. Hyderabad metro area)
+  // Default fallback center (Hyderabad HITEC City / Jubilee Hills area)
   const centerLat = originLat || 17.4435;
   const centerLng = originLng || 78.3772;
 
@@ -57,13 +52,15 @@ export default function RoutePreviewMap({
     } catch {}
   }
 
-  // Google Maps HTML with light minimal sky blue styling
+  // CartoDB Voyager HTML: 100% reliable, zero billing required, exact light minimal sky blue aesthetic
   const htmlContent = `
 <!DOCTYPE html>
 <html>
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no" />
+  <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
+  <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
   <style>
     html, body {
       margin: 0;
@@ -78,19 +75,38 @@ export default function RoutePreviewMap({
       width: 100%;
       height: 100%;
     }
-    /* Origin Pin Marker */
-    .origin-marker {
-      width: 18px;
-      height: 18px;
+    /* Minimalist Map Tile Styling */
+    .leaflet-tile {
+      filter: contrast(102%) brightness(101%);
+    }
+    /* Origin Pin: Clean Ring with Center Pulse */
+    .origin-marker-wrap {
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      width: 24px;
+      height: 24px;
+    }
+    .origin-ring {
+      width: 16px;
+      height: 16px;
       border: 3.5px solid #0284c7;
       background: #ffffff;
       border-radius: 50%;
-      box-shadow: 0 2px 6px rgba(2, 132, 199, 0.5);
+      box-shadow: 0 2px 6px rgba(2, 132, 199, 0.45);
     }
-    /* Red Destination Pin */
-    .dest-pin {
-      width: 32px;
-      height: 32px;
+    /* Destination Pin: Red Pin Marker with Icon */
+    .dest-marker-wrap {
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      width: 36px;
+      height: 36px;
+    }
+    .dest-pin-body {
+      width: 28px;
+      height: 28px;
       background: #ef4444;
       border: 2.5px solid #ffffff;
       border-radius: 50% 50% 50% 0;
@@ -99,199 +115,184 @@ export default function RoutePreviewMap({
       display: flex;
       align-items: center;
       justify-content: center;
-      color: #ffffff;
-      font-size: 13px;
     }
-    .dest-pin span {
+    .dest-pin-icon {
       transform: rotate(45deg);
+      font-size: 13px;
+      line-height: 1;
+      color: #ffffff;
+    }
+    .dest-pin-shadow {
+      width: 10px;
+      height: 4px;
+      background: rgba(0,0,0,0.25);
+      border-radius: 50%;
+      margin-top: 2px;
+    }
+    /* Tooltip */
+    .custom-tooltip {
+      font-size: 11px;
+      font-weight: 700;
+      color: #0f172a;
+      background: #ffffff;
+      border-radius: 6px;
+      padding: 3px 7px;
+      border: 1px solid #cbd5e1;
+      box-shadow: 0 2px 6px rgba(0,0,0,0.12);
+      white-space: nowrap;
+    }
+    /* Subtle Brand Map Watermark */
+    .map-watermark {
+      position: absolute;
+      bottom: 8px;
+      left: 10px;
+      z-index: 1000;
+      font-size: 11px;
+      font-weight: 700;
+      color: #64748b;
+      opacity: 0.75;
+      pointer-events: none;
     }
   </style>
 </head>
 <body>
   <div id="map"></div>
+  <div class="map-watermark">Lo Ride Maps</div>
 
   <script>
-    // Custom Google Maps Style: Light minimal with soft sky blue water & clean subtle roads
-    var mapStyles = [
-      {
-        "featureType": "water",
-        "elementType": "geometry",
-        "stylers": [{ "color": "#c0e1fb" }] // Light minimal sky blue water
-      },
-      {
-        "featureType": "landscape",
-        "elementType": "geometry",
-        "stylers": [{ "color": "#f8fafc" }] // Clean minimal light off-white land
-      },
-      {
-        "featureType": "poi.park",
-        "elementType": "geometry",
-        "stylers": [{ "color": "#dcfce7" }] // Pastel green parks
-      },
-      {
-        "featureType": "poi",
-        "elementType": "labels.text",
-        "stylers": [{ "visibility": "simplified" }]
-      },
-      {
-        "featureType": "road",
-        "elementType": "geometry",
-        "stylers": [{ "color": "#ffffff" }] // Crisp white roads
-      },
-      {
-        "featureType": "road",
-        "elementType": "geometry.stroke",
-        "stylers": [{ "color": "#e2e8f0" }] // Subtle road borders
-      },
-      {
-        "featureType": "road.highway",
-        "elementType": "geometry",
-        "stylers": [{ "color": "#fed7aa" }] // Soft pastel highway
-      },
-      {
-        "featureType": "road.highway",
-        "elementType": "geometry.stroke",
-        "stylers": [{ "color": "#fdba74" }]
-      },
-      {
-        "featureType": "transit",
-        "stylers": [{ "visibility": "simplified" }]
-      },
-      {
-        "featureType": "all",
-        "elementType": "labels.text.fill",
-        "stylers": [{ "color": "#475569" }]
-      },
-      {
-        "featureType": "all",
-        "elementType": "labels.text.stroke",
-        "stylers": [{ "color": "#ffffff" }, { "weight": 3 }]
-      }
-    ];
+    var map = L.map('map', {
+      zoomControl: false,
+      attributionControl: false
+    }).setView([${centerLat}, ${centerLng}], 13);
 
-    var map = null;
-    var directionsRenderer = null;
-    var originMarker = null;
-    var destMarker = null;
+    // CartoDB Voyager: Clean, modern light minimal map with pastel sky blue water & subtle roads
+    L.tileLayer('https://{s}.basemaps.cartocdn.com/rastertiles/voyager/{z}/{x}/{y}{r}.png', {
+      maxZoom: 19,
+      subdomains: 'abcd'
+    }).addTo(map);
 
-    function initMap() {
-      try {
-        var centerPos = { lat: ${centerLat}, lng: ${centerLng} };
+    var boundsMarkers = [];
 
-        map = new google.maps.Map(document.getElementById('map'), {
-          center: centerPos,
-          zoom: 13,
-          styles: mapStyles,
-          disableDefaultUI: true,
-          zoomControl: false,
-          gestureHandling: 'greedy'
-        });
-
-        // Setup directions renderer with blue route polyline
-        var directionsService = new google.maps.DirectionsService();
-        directionsRenderer = new google.maps.DirectionsRenderer({
-          map: map,
-          suppressMarkers: true,
-          preserveViewport: false,
-          polylineOptions: {
-            strokeColor: '#0284c7', // Sky Blue brand route
-            strokeWeight: 6,
-            strokeOpacity: 0.95
-          }
-        });
-
-        // Add custom markers
-        ${
-          originLat && originLng
-            ? `
-          originMarker = new google.maps.Marker({
-            position: { lat: ${originLat}, lng: ${originLng} },
-            map: map,
-            title: "${originName.replace(/"/g, '\\"')}",
-            icon: {
-              path: google.maps.SymbolPath.CIRCLE,
-              scale: 8,
-              fillColor: '#ffffff',
-              fillOpacity: 1,
-              strokeColor: '#0284c7',
-              strokeWeight: 4
-            }
-          });
-        `
-            : ''
-        }
-
-        ${
-          destLat && destLng
-            ? `
-          destMarker = new google.maps.Marker({
-            position: { lat: ${destLat}, lng: ${destLng} },
-            map: map,
-            title: "${destName.replace(/"/g, '\\"')}",
-            label: {
-              text: '📍',
-              fontSize: '18px'
-            }
-          });
-        `
-            : ''
-        }
-
-        // Calculate and render route via Google Directions
-        ${
-          originLat && originLng && destLat && destLng
-            ? `
-          directionsService.route({
-            origin: { lat: ${originLat}, lng: ${originLng} },
-            destination: { lat: ${destLat}, lng: ${destLng} },
-            travelMode: google.maps.TravelMode.DRIVING
-          }, function(result, status) {
-            if (status === google.maps.DirectionsStatus.OK) {
-              directionsRenderer.setDirections(result);
-            } else {
-              // Fallback to fitting bounds around markers
-              fitMarkersBounds();
-            }
-          });
-        `
-            : `
-          fitMarkersBounds();
-        `
-        }
-
-        window.fitRouteBounds = function() {
-          if (directionsRenderer && directionsRenderer.getDirections()) {
-            var bounds = directionsRenderer.getDirections().routes[0].bounds;
-            map.fitBounds(bounds);
-          } else {
-            fitMarkersBounds();
-          }
-        };
-
-        function fitMarkersBounds() {
-          var bounds = new google.maps.LatLngBounds();
-          var count = 0;
-          if (originMarker) { bounds.extend(originMarker.getPosition()); count++; }
-          if (destMarker) { bounds.extend(destMarker.getPosition()); count++; }
-          if (count > 1) {
-            map.fitBounds(bounds);
-          } else if (count === 1) {
-            map.setCenter(centerPos);
-            map.setZoom(14);
-          }
-        }
-      } catch (err) {
-        console.error(err);
-      }
+    // Origin Marker
+    ${
+      originLat && originLng
+        ? `
+      var originIcon = L.divIcon({
+        className: 'custom-div-icon',
+        html: '<div class="origin-marker-wrap"><div class="origin-ring"></div></div>',
+        iconSize: [24, 24],
+        iconAnchor: [12, 12]
+      });
+      var originMarker = L.marker([${originLat}, ${originLng}], { icon: originIcon }).addTo(map);
+      originMarker.bindTooltip("${originName.replace(/"/g, '\\"')}", {
+        permanent: false,
+        direction: 'top',
+        className: 'custom-tooltip'
+      });
+      boundsMarkers.push([${originLat}, ${originLng}]);
+    `
+        : ''
     }
-  </script>
 
-  <!-- Google Maps JavaScript API with user's authorized API key -->
-  <script
-    async
-    defer
-    src="https://maps.googleapis.com/maps/api/js?key=${GOOGLE_MAPS_KEY}&callback=initMap&libraries=geometry"
-  ></script>
+    // Destination Marker
+    ${
+      destLat && destLng
+        ? `
+      var destIcon = L.divIcon({
+        className: 'custom-div-icon',
+        html: '<div class="dest-marker-wrap"><div class="dest-pin-body"><span class="dest-pin-icon">📍</span></div><div class="dest-pin-shadow"></div></div>',
+        iconSize: [36, 36],
+        iconAnchor: [18, 34]
+      });
+      var destMarker = L.marker([${destLat}, ${destLng}], { icon: destIcon }).addTo(map);
+      destMarker.bindTooltip("${destName.replace(/"/g, '\\"')}", {
+        permanent: true,
+        direction: 'top',
+        className: 'custom-tooltip'
+      });
+      boundsMarkers.push([${destLat}, ${destLng}]);
+    `
+        : ''
+    }
+
+    // Fetch live turn-by-turn road route via OSRM
+    ${
+      originLat && originLng && destLat && destLng
+        ? `
+      var osrmUrl = 'https://router.project-osrm.org/route/v1/driving/${originLng},${originLat};${destLng},${destLat}?overview=full&geometries=geojson';
+      
+      fetch(osrmUrl)
+        .then(function(res) { return res.json(); })
+        .then(function(data) {
+          if (data && data.routes && data.routes.length > 0) {
+            var routeCoords = data.routes[0].geometry.coordinates.map(function(c) {
+              return [c[1], c[0]];
+            });
+
+            // Subtle route glow/casing
+            L.polyline(routeCoords, {
+              color: '#0284c7',
+              weight: 8,
+              opacity: 0.28,
+              lineJoin: 'round',
+              lineCap: 'round'
+            }).addTo(map);
+
+            // Primary vivid sky blue route polyline
+            var activePolyline = L.polyline(routeCoords, {
+              color: '#0284c7',
+              weight: 5,
+              opacity: 0.95,
+              lineJoin: 'round',
+              lineCap: 'round'
+            }).addTo(map);
+
+            map.fitBounds(activePolyline.getBounds(), {
+              padding: [45, 45],
+              maxZoom: 15
+            });
+          } else {
+            drawFallbackLine();
+          }
+        })
+        .catch(function() {
+          drawFallbackLine();
+        });
+
+      function drawFallbackLine() {
+        var fallbackLine = L.polyline([
+          [${originLat}, ${originLng}],
+          [${destLat}, ${destLng}]
+        ], {
+          color: '#0284c7',
+          weight: 4,
+          opacity: 0.85,
+          dashArray: '6, 8',
+          lineJoin: 'round'
+        }).addTo(map);
+
+        map.fitBounds(fallbackLine.getBounds(), {
+          padding: [50, 50],
+          maxZoom: 15
+        });
+      }
+    `
+        : `
+      if (boundsMarkers.length === 1) {
+        map.setView(boundsMarkers[0], 14);
+      }
+    `
+    }
+
+    // Function to re-fit route bounds
+    window.fitRouteBounds = function() {
+      if (boundsMarkers.length > 1) {
+        map.fitBounds(boundsMarkers, { padding: [45, 45] });
+      } else if (boundsMarkers.length === 1) {
+        map.setView(boundsMarkers[0], 14);
+      }
+    };
+  </script>
 </body>
 </html>
   `;
