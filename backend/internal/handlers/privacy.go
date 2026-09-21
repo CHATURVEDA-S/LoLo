@@ -160,7 +160,7 @@ const privacyPolicyHTML = `<!DOCTYPE html>
   <main class="container">
     <div class="card">
       <div class="meta-box">
-        <strong>Application:</strong> Lo Ride (<code>com.loloride.app</code>)<br>
+        <strong>Application:</strong> Lo Ride (<code>com.chaturveda.saathi.customer</code>)<br>
         <strong>Effective Date:</strong> September 20, 2026<br>
         <strong>Last Updated:</strong> September 20, 2026
       </div>
@@ -287,7 +287,7 @@ const privacyPolicyHTML = `<!DOCTYPE html>
   </main>
 
   <footer>
-    &copy; 2026 Lo Ride Technologies. All rights reserved. • Package ID: com.loloride.app
+    &copy; 2026 Lo Ride Technologies. All rights reserved. • Package ID: com.chaturveda.saathi.customer
   </footer>
 
 </body>

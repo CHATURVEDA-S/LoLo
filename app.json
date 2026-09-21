@@ -20,7 +20,7 @@
       }
     },
     "android": {
-      "package": "com.loloride.app",
+      "package": "com.chaturveda.saathi.customer",
       "versionCode": 5,
       "adaptiveIcon": {
         "foregroundImage": "./assets/images/adaptive-icon.png",

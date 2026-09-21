@@ -39,7 +39,7 @@ export default function PrivacyPolicyScreen() {
           </View>
           <Text style={styles.heroTitle}>Lo Ride Privacy Policy</Text>
           <Text style={styles.heroSubtitle}>
-            Application: com.loloride.app • Effective: Sept 20, 2026
+            Application: com.chaturveda.saathi.customer • Effective: Sept 20, 2026
           </Text>
         </LinearGradient>
 
