@@ -16,19 +16,19 @@
         "NSMicrophoneUsageDescription": "Lo Ride needs access to your microphone for secure in-app voice calls between drivers and verified passengers."
       },
       "config": {
-        "googleMapsApiKey": "YOUR_GOOGLE_MAPS_API_KEY"
+        "googleMapsApiKey": "AIzaSyAg8BiwWrJEYduu94ilNNebUdBFOD3B9uQ"
       }
     },
     "android": {
       "package": "com.loloride.app",
-      "versionCode": 3,
+      "versionCode": 5,
       "adaptiveIcon": {
         "foregroundImage": "./assets/images/adaptive-icon.png",
         "backgroundColor": "#ffffff"
       },
       "config": {
         "googleMaps": {
-          "apiKey": "YOUR_GOOGLE_MAPS_API_KEY"
+          "apiKey": "AIzaSyAg8BiwWrJEYduu94ilNNebUdBFOD3B9uQ"
         }
       },
       "permissions": [
