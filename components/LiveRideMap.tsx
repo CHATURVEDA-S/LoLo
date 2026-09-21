@@ -298,9 +298,11 @@ export default function LiveRideMap({
   <script>
     var map = L.map('map', { zoomControl: false }).setView([${centerLat}, ${centerLng}], 14);
 
-    L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+    // CartoDB Voyager: Clean, modern light minimal map with pastel sky blue water & subtle roads
+    L.tileLayer('https://{s}.basemaps.cartocdn.com/rastertiles/voyager/{z}/{x}/{y}{r}.png', {
       maxZoom: 19,
-      attribution: '© OpenStreetMap'
+      subdomains: 'abcd',
+      attribution: '© CartoDB © OpenStreetMap'
     }).addTo(map);
 
     var driverMarker = null;
@@ -357,9 +359,68 @@ export default function LiveRideMap({
         : ''
     }
 
-    // Fit bounds to show all active markers
-    if (markers.length > 1) {
-      map.fitBounds(markers, { padding: [40, 40] });
+    // Live Turn-by-Turn Road Route via OSRM
+    ${
+      (originLat || pickupLat) && (originLng || pickupLng) && destLat && destLng
+        ? `
+      var routeStartLat = ${pickupLat ?? originLat};
+      var routeStartLng = ${pickupLng ?? originLng};
+      var osrmUrl = 'https://router.project-osrm.org/route/v1/driving/' + routeStartLng + ',' + routeStartLat + ';' + ${destLng} + ',' + ${destLat} + '?overview=full&geometries=geojson';
+      
+      fetch(osrmUrl)
+        .then(function(res) { return res.json(); })
+        .then(function(data) {
+          if (data && data.routes && data.routes.length > 0) {
+            var routeCoords = data.routes[0].geometry.coordinates.map(function(c) {
+              return [c[1], c[0]];
+            });
+
+            // Route halo
+            L.polyline(routeCoords, {
+              color: '#0284c7',
+              weight: 8,
+              opacity: 0.25,
+              lineJoin: 'round',
+              lineCap: 'round'
+            }).addTo(map);
+
+            // Active blue route
+            var activePoly = L.polyline(routeCoords, {
+              color: '#0284c7',
+              weight: 5,
+              opacity: 0.95,
+              lineJoin: 'round',
+              lineCap: 'round'
+            }).addTo(map);
+
+            map.fitBounds(activePoly.getBounds(), { padding: [40, 40] });
+          } else {
+            fallbackPoly();
+          }
+        })
+        .catch(function() {
+          fallbackPoly();
+        });
+
+      function fallbackPoly() {
+        var line = L.polyline([
+          [routeStartLat, routeStartLng],
+          [${destLat}, ${destLng}]
+        ], {
+          color: '#0284c7',
+          weight: 4,
+          opacity: 0.85,
+          dashArray: '6, 8',
+          lineJoin: 'round'
+        }).addTo(map);
+        map.fitBounds(line.getBounds(), { padding: [40, 40] });
+      }
+    `
+        : `
+      if (markers.length > 1) {
+        map.fitBounds(markers, { padding: [40, 40] });
+      }
+    `
     }
 
     // Handle messages from React Native
