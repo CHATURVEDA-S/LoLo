@@ -20,6 +20,7 @@ interface RoutePreviewMapProps {
   height?: DimensionValue;
   onPlusPress?: () => void;
   onSharePress?: () => void;
+  onMapClick?: (coords: { lat: number; lng: number }) => void;
 }
 
 export default function RoutePreviewMap({
@@ -32,6 +33,7 @@ export default function RoutePreviewMap({
   height = 260,
   onPlusPress,
   onSharePress,
+  onMapClick,
 }: RoutePreviewMapProps) {
   const webViewRef = useRef<WebView>(null);
 
@@ -336,6 +338,24 @@ export default function RoutePreviewMap({
         }
       } catch (e) {}
     });
+
+    // Map click handler to select point directly on map
+    map.on('click', function(e) {
+      try {
+        if (e && e.latlng) {
+          var payload = JSON.stringify({
+            type: 'MAP_CLICK',
+            lat: e.latlng.lat,
+            lng: e.latlng.lng
+          });
+          if (window.ReactNativeWebView && window.ReactNativeWebView.postMessage) {
+            window.ReactNativeWebView.postMessage(payload);
+          }
+        }
+      } catch (err) {
+        console.error('map click err', err);
+      }
+    });
   </script>
 </body>
 </html>
@@ -365,6 +385,14 @@ export default function RoutePreviewMap({
         javaScriptEnabled
         domStorageEnabled
         androidLayerType="hardware"
+        onMessage={(event) => {
+          try {
+            const data = JSON.parse(event.nativeEvent.data);
+            if (data.type === 'MAP_CLICK' && onMapClick) {
+              onMapClick({ lat: data.lat, lng: data.lng });
+            }
+          } catch (e) {}
+        }}
       />
 
       {/* Floating Action Buttons */}

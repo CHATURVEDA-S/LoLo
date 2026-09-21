@@ -301,6 +301,41 @@ export default function FindRideScreen() {
     } catch {}
   }
 
+  // Handle selecting a location directly by tapping on the map
+  async function handleMapLocationSelect(coords: { lat: number; lng: number }) {
+    const isOrigin = activeInput === 'origin';
+    const cleanLat = Math.round(coords.lat * 100000) / 100000;
+    const cleanLng = Math.round(coords.lng * 100000) / 100000;
+
+    if (isOrigin) {
+      setOriginCoords({ lat: cleanLat, lng: cleanLng });
+      setOrigin(`${cleanLat}, ${cleanLng}`);
+      try {
+        const [geo] = await Location.reverseGeocodeAsync({
+          latitude: cleanLat,
+          longitude: cleanLng,
+        });
+        if (geo) {
+          const parts = [geo.name, geo.street, geo.subregion || geo.district || geo.city].filter(Boolean);
+          if (parts.length > 0) setOrigin(parts.join(', '));
+        }
+      } catch {}
+    } else {
+      setDestCoords({ lat: cleanLat, lng: cleanLng });
+      setDestination(`${cleanLat}, ${cleanLng}`);
+      try {
+        const [geo] = await Location.reverseGeocodeAsync({
+          latitude: cleanLat,
+          longitude: cleanLng,
+        });
+        if (geo) {
+          const parts = [geo.name, geo.street, geo.subregion || geo.district || geo.city].filter(Boolean);
+          if (parts.length > 0) setDestination(parts.join(', '));
+        }
+      } catch {}
+    }
+  }
+
   // Fetch real database rides
   async function fetchRides() {
     setLoadingRides(true);
@@ -705,7 +740,14 @@ export default function FindRideScreen() {
                 destLng={destCoords?.lng}
                 destName={destination || 'Destination'}
                 height={mapHeight}
+                onMapClick={handleMapLocationSelect}
               />
+              {!hasRoute && (
+                <View style={styles.mapHintBadge} pointerEvents="none">
+                  <MapPin size={13} color="#0284c7" strokeWidth={2.4} />
+                  <Text style={styles.mapHintText}>Tap anywhere on map to select destination</Text>
+                </View>
+              )}
             </View>
 
             {/* ONCE DESTINATION ADDRESS IS SELECTED: SHOW STEP-BY-STEP FLOW */}
@@ -1192,6 +1234,28 @@ const styles = StyleSheet.create({
   mapContainer: {
     width: '100%',
     height: 260,
+    position: 'relative',
+  },
+  mapHintBadge: {
+    position: 'absolute',
+    top: 14,
+    alignSelf: 'center',
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+    backgroundColor: '#ffffff',
+    paddingHorizontal: 14,
+    paddingVertical: 7,
+    borderRadius: 20,
+    borderWidth: 1,
+    borderColor: '#e2e8f0',
+    ...Shadow.sm,
+    zIndex: 50,
+  },
+  mapHintText: {
+    fontSize: 12,
+    fontWeight: '700',
+    color: '#0f172a',
   },
   stepSection: {
     marginTop: 14,
