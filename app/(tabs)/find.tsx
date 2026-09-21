@@ -389,20 +389,6 @@ export default function FindRideScreen() {
     return calculateFare({ distanceKm: routeDistanceKm, vehicleType: 'bike' }).suggestedFare;
   }, [hasRoute, bikepoolRides, routeDistanceKm]);
 
-  // Quick popular destinations for active city
-  const activeCity = user?.city || 'Hyderabad';
-  const quickPlaces = useMemo(() => {
-    const list = (METRO_PLACES as any)[activeCity] || (METRO_PLACES as any)['Hyderabad'] || [];
-    return list.slice(0, 6);
-  }, [activeCity]);
-
-  function handleSelectQuickDestination(place: { name: string; address?: string; lat: number; lng: number }) {
-    setDestination(place.name);
-    setDestCoords({ lat: place.lat, lng: place.lng });
-    setSuggestions([]);
-    setActiveInput(null);
-  }
-
   // Format schedule text (e.g., "10:00 AM, Tomorrow")
   function formatSchedule(d: Date) {
     const now = new Date();
@@ -587,7 +573,7 @@ export default function FindRideScreen() {
             <View style={styles.destPinDot} />
             <TextInput
               style={styles.inputField}
-              placeholder="Where are you going?"
+              placeholder="Enter destination"
               placeholderTextColor="#94a3b8"
               value={destination}
               onChangeText={(text) => {
@@ -706,54 +692,8 @@ export default function FindRideScreen() {
               />
             </View>
 
-            {/* IF NO DESTINATION / ROUTE SELECTED YET: SHOW DESTINATION GUIDANCE (NO AMOUNTS) */}
-            {!hasRoute ? (
-              <View style={styles.destinationPromptCard}>
-                <View style={styles.promptHeaderRow}>
-                  <View style={styles.promptIconCircle}>
-                    <MapPin size={22} color="#0284c7" strokeWidth={2.4} />
-                  </View>
-                  <View style={{ flex: 1 }}>
-                    <Text style={styles.promptTitle}>Where are you going?</Text>
-                    <Text style={styles.promptSubtitle}>
-                      Enter your destination above to set your departure schedule, choose Carpool or Bikepool, and view live fares.
-                    </Text>
-                  </View>
-                </View>
-
-                {/* Popular Commute Hubs in City */}
-                <Text style={styles.quickHubsLabel}>Popular commute destinations in {activeCity}:</Text>
-                <View style={styles.quickHubsWrap}>
-                  {quickPlaces.map((place: any, idx: number) => (
-                    <TouchableOpacity
-                      key={`${place.name}-${idx}`}
-                      style={styles.quickHubChip}
-                      onPress={() => handleSelectQuickDestination(place)}
-                      activeOpacity={0.75}
-                    >
-                      <Navigation size={12} color="#0284c7" strokeWidth={2.2} />
-                      <Text style={styles.quickHubText} numberOfLines={1}>
-                        {place.name}
-                      </Text>
-                    </TouchableOpacity>
-                  ))}
-                </View>
-
-                {/* Direct "Need a Drop" prompt */}
-                <TouchableOpacity
-                  style={styles.promptPostBanner}
-                  onPress={() => router.push('/passenger-post/create')}
-                  activeOpacity={0.85}
-                >
-                  <View style={styles.promptPostLeft}>
-                    <Sparkles size={16} color="#0284c7" />
-                    <Text style={styles.promptPostBannerText}>Need a Drop? Post a passenger request</Text>
-                  </View>
-                  <ChevronRight size={15} color="#64748b" />
-                </TouchableOpacity>
-              </View>
-            ) : (
-              /* ONCE DESTINATION ADDRESS IS SELECTED: SHOW STEP-BY-STEP FLOW */
+            {/* ONCE DESTINATION ADDRESS IS SELECTED: SHOW STEP-BY-STEP FLOW */}
+            {hasRoute && (
               <>
                 {/* STEP 1: DEPARTURE TIME & DATE */}
                 <View style={styles.stepSection}>
@@ -1236,93 +1176,6 @@ const styles = StyleSheet.create({
   mapContainer: {
     width: '100%',
     height: 260,
-  },
-  destinationPromptCard: {
-    marginHorizontal: 16,
-    marginTop: 14,
-    padding: 16,
-    backgroundColor: '#ffffff',
-    borderRadius: 16,
-    borderWidth: 1.5,
-    borderColor: '#e2e8f0',
-    ...Shadow.sm,
-  },
-  promptHeaderRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    marginBottom: 6,
-  },
-  promptIconCircle: {
-    width: 44,
-    height: 44,
-    borderRadius: 22,
-    backgroundColor: '#e0f2fe',
-    alignItems: 'center',
-    justifyContent: 'center',
-    marginRight: 12,
-  },
-  promptTitle: {
-    fontSize: 16,
-    fontWeight: '700',
-    color: '#0f172a',
-  },
-  promptSubtitle: {
-    fontSize: 12.5,
-    color: '#64748b',
-    marginTop: 2,
-    lineHeight: 18,
-  },
-  quickHubsLabel: {
-    fontSize: 12,
-    fontWeight: '700',
-    color: '#475569',
-    marginTop: 14,
-    marginBottom: 8,
-  },
-  quickHubsWrap: {
-    flexDirection: 'row',
-    flexWrap: 'wrap',
-    gap: 8,
-  },
-  quickHubChip: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 6,
-    backgroundColor: '#f8fafc',
-    borderWidth: 1,
-    borderColor: '#cbd5e1',
-    borderRadius: 20,
-    paddingHorizontal: 12,
-    paddingVertical: 7,
-  },
-  quickHubText: {
-    fontSize: 12,
-    fontWeight: '600',
-    color: '#1e293b',
-  },
-  promptPostBanner: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'space-between',
-    backgroundColor: '#f0f9ff',
-    borderWidth: 1,
-    borderColor: '#bae6fd',
-    borderRadius: 10,
-    paddingHorizontal: 12,
-    paddingVertical: 10,
-    marginTop: 14,
-  },
-  promptPostLeft: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 8,
-    flex: 1,
-  },
-  promptPostBannerText: {
-    fontSize: 12.5,
-    fontWeight: '700',
-    color: '#0284c7',
-    flex: 1,
   },
   stepSection: {
     marginTop: 14,
