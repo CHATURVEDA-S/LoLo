@@ -4,6 +4,7 @@ import {
   View,
   TouchableOpacity,
   Share,
+  DimensionValue,
 } from 'react-native';
 import { WebView } from 'react-native-webview';
 import { Share2, Plus, Minus, Crosshair } from 'lucide-react-native';
@@ -16,7 +17,7 @@ interface RoutePreviewMapProps {
   destLat?: number;
   destLng?: number;
   destName?: string;
-  height?: number;
+  height?: DimensionValue;
   onPlusPress?: () => void;
   onSharePress?: () => void;
 }
@@ -325,6 +326,16 @@ export default function RoutePreviewMap({
         console.error('fitRouteBounds err', e);
       }
     };
+
+    // Auto-adjust map viewport whenever the container resizes
+    window.addEventListener('resize', function() {
+      try {
+        if (map) {
+          map.invalidateSize();
+          if (window.fitRouteBounds) { window.fitRouteBounds(); }
+        }
+      } catch (e) {}
+    });
   </script>
 </body>
 </html>

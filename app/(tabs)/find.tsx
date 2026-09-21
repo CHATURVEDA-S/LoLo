@@ -11,6 +11,9 @@ import {
   Image,
   Platform,
   Alert,
+  useWindowDimensions,
+  LayoutAnimation,
+  UIManager,
 } from 'react-native';
 import { router, useFocusEffect, useLocalSearchParams } from 'expo-router';
 import * as Location from 'expo-location';
@@ -389,6 +392,15 @@ export default function FindRideScreen() {
     return calculateFare({ distanceKm: routeDistanceKm, vehicleType: 'bike' }).suggestedFare;
   }, [hasRoute, bikepoolRides, routeDistanceKm]);
 
+  // Full page map height before address selection, auto-adjusting compact height when address is selected
+  const { height: windowHeight } = useWindowDimensions();
+  const fullMapHeight = Math.max(380, windowHeight - insets.top - insets.bottom - 175);
+  const mapHeight = hasRoute ? 230 : fullMapHeight;
+
+  useEffect(() => {
+    LayoutAnimation.configureNext(LayoutAnimation.Presets.easeInEaseOut);
+  }, [hasRoute]);
+
   // Format schedule text (e.g., "10:00 AM, Tomorrow")
   function formatSchedule(d: Date) {
     const now = new Date();
@@ -658,7 +670,11 @@ export default function FindRideScreen() {
       <ScrollView
         ref={scrollViewRef}
         style={styles.scrollArea}
-        contentContainerStyle={{ paddingBottom: bottomAutoPadding }}
+        contentContainerStyle={{
+          flexGrow: 1,
+          paddingBottom: hasRoute ? bottomAutoPadding : 0,
+        }}
+        scrollEnabled={hasRoute}
         showsVerticalScrollIndicator={false}
         refreshControl={
           <RefreshControl
@@ -679,8 +695,8 @@ export default function FindRideScreen() {
         {/* ========================================================== */}
         {activeTab === 'rides' ? (
           <>
-            {/* 2. LIGHT MINIMAL SKY BLUE ROUTE MAP */}
-            <View style={styles.mapContainer}>
+            {/* 2. LIGHT MINIMAL SKY BLUE ROUTE MAP (FULL PAGE WHEN NO ROUTE, AUTO-ADJUSTS ON ADDRESS SELECTION) */}
+            <View style={[styles.mapContainer, { height: mapHeight }]}>
               <RoutePreviewMap
                 originLat={originCoords?.lat}
                 originLng={originCoords?.lng}
@@ -688,7 +704,7 @@ export default function FindRideScreen() {
                 destLat={destCoords?.lat}
                 destLng={destCoords?.lng}
                 destName={destination || 'Destination'}
-                height={260}
+                height={mapHeight}
               />
             </View>
 
