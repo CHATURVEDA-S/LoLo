@@ -21,10 +21,10 @@
     },
     "android": {
       "package": "com.loloride.app",
-      "versionCode": 1,
+      "versionCode": 3,
       "adaptiveIcon": {
-        "foregroundImage": "./assets/images/icon.png",
-        "backgroundColor": "#0284c7"
+        "foregroundImage": "./assets/images/adaptive-icon.png",
+        "backgroundColor": "#ffffff"
       },
       "config": {
         "googleMaps": {
