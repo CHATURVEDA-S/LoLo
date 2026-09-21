@@ -2,7 +2,7 @@
   "expo": {
     "name": "Lo Ride",
     "slug": "lo-ride",
-    "version": "1.0.0",
+    "version": "1.0.6",
     "orientation": "portrait",
     "icon": "./assets/images/icon.png",
     "scheme": "loride",
@@ -21,7 +21,7 @@
     },
     "android": {
       "package": "com.chaturveda.saathi.customer",
-      "versionCode": 5,
+      "versionCode": 9,
       "adaptiveIcon": {
         "foregroundImage": "./assets/images/adaptive-icon.png",
         "backgroundColor": "#ffffff"
