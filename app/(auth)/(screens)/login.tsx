@@ -528,6 +528,8 @@ export default function LoginScreen() {
                       maxLength={8}
                       autoFocus
                       caretHidden
+                      cursorColor="transparent"
+                      selectionColor="transparent"
                       contextMenuHidden={false}
                       selectTextOnFocus={false}
                     />
@@ -942,9 +944,7 @@ const styles = StyleSheet.create({
     bottom: 0,
     width: '100%',
     height: 52,
-    color: 'transparent',
-    backgroundColor: 'transparent',
-    fontSize: 24,
+    opacity: 0,
     zIndex: 10,
   },
   boxesRow: {
